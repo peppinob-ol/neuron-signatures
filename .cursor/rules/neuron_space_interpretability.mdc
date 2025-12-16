@@ -1,3 +1,153 @@
 ---
 alwaysApply: true
+tags: [interpretability, neuron_space, gemma2]
+description: "Regole di progetto per pipeline interpretability neuron-space con hook TransformerLens su gemma-2-2b"
 ---
+
+Sto implementando una pipeline di mechanistic interpretability in neuron space (vanilla), ispirata al paper Anthropic Circuit Tracing, ma con obiettivo principale: profilare neuroni MLP tramite firme di attivazione cross-prompt e validare le interpretazioni con interventi di ablation/amplification/injection (stile “Texas→California” per far cambiare il completamento “Austin→Sacramento”). Non mi interessa, per ora, costruire o interpretare gli edge tra neuroni; mi interessa invece replicare la robustezza del mio metodo CLT basato su probe prompts e signature comportamentali.
+
+Contesto: cosa ho già verificato (importante, non rifare ipotesi)
+
+Uso TransformerLens (HookedTransformer) con modello vanilla google/gemma-2-2b (26 layers, d_model=2304, d_mlp=9216, n_heads=8). Ho verificato che TL espone i seguenti hookpoint MLP per ogni layer:
+
+blocks.L.mlp.hook_pre (shape [batch, pos, d_mlp])
+
+blocks.L.mlp.hook_pre_linear (shape [batch, pos, d_mlp])
+
+blocks.L.mlp.hook_post (shape [batch, pos, d_mlp])
+
+blocks.L.hook_mlp_out (shape [batch, pos, d_model])
+
+In più, Gemma-2 ha una normalizzazione post-MLP: blocks.L.ln2_post è una RMSNorm con hookpoints:
+
+blocks.L.ln2_post.hook_normalized
+
+blocks.L.ln2_post.hook_scale
+
+Ho fatto un sanity check corretto e ho dimostrato esattamente (errore massimo 0.0 in bf16) che vale:
+
+blocks.L.hook_mlp_out == blocks.L.ln2_post( blocks.L.mlp.hook_post @ W_out + b_out )
+
+Quindi:
+
+la “vera” attivazione neurone MLP (per profiling e interventi) è una coordinata di blocks.L.mlp.hook_post[..., i] (dimensione i di d_mlp).
+
+se mi serve la quantità che “scrive nel residual”, devo passare da hook_post → proiezione W_out → ln2_post (esattamente come sopra).
+
+Nota pratica: ActivationCache di TransformerLens non è un dict: per accedere usare cache[name] e per testare presenza usare name in cache. Non usare .get().
+
+Obiettivo implementativo (versione neuron-space del mio metodo CLT)
+
+Voglio replicare questo flusso logico (che già funziona su CLT) ma sostituendo “feature CLT” con “neuroni MLP (hook_post)”:
+
+Input: un seed prompt tipo “The capital of the state containing Dallas is”.
+
+Genero/uso un set di probe prompts che mantengono struttura sintattica ma cambiano contenuto semantico (entity/relationship/attribute), così da isolare concetti. Il mio metodo si basa su prompt simili con molti token in comune.
+
+Misuro, per ogni probe prompt, le attivazioni dei neuroni MLP su tutti i layer e token, ma in pratica voglio una pipeline efficiente che:
+
+calcola statistiche per neurone e per prompt (max, sum, peak_token, peak_token_idx, densità sopra soglia, ecc.)
+
+calcola firme cross-prompt (consistenza dei picchi su token semantici vs funzionali, numero di token distinti su cui picca, ecc.)
+
+Classifico neuroni (o piccoli gruppi) in categorie funzionali simili a prima: “semantic/dictionary-like”, “relationship-like”, “Say X” (output promotion su token funzionali come “is”, “the”, “,” con target token semantico vicino).
+
+Validazione causale: applico interventi tipo:
+
+ablation: azzero o moltiplico per M=0 i neuroni “Texas-like”
+
+injection/amplify: imposto un valore o moltiplico per M>1 neuroni “California-like”
+
+target: cambiare completamento (Austin → Sacramento) mantenendo il prompt quasi identico.
+
+Per ora non serve costruire grafi di edge. Se serve “ranking” dei neuroni candidati, posso usare euristiche (top-k per |activation| su hook_post, o differenza tra prompt, o proxy su logit target).
+
+Definizione operativa di “neurone” e “attivazione”
+
+“Feature = neurone MLP” significa: una dimensione i del vettore hook_post al layer L e token position p.
+
+Attivazione base per profiling: a = hook_post[0, p, i].
+
+Per interventi: agisco su quel a (moltiplicazione M, ablation, injection).
+
+Se devo stimare “influenza sul residuo” senza edge: calcolo anche (opzionale) mlp_out = ln2_post( hook_post @ W_out + b_out ) e posso guardare come cambia una direzione/logit.
+
+Considerazioni architetturali specifiche di Gemma-2 (non ignorare)
+
+ln2_post (RMSNorm) è applicata dopo la proiezione MLP: se confronto hook_post @ W_out con hook_mlp_out senza ln2_post, ottengo errori enormi (50–140). Con ln2_post l’errore va a 0.
+
+TL ha warning su “LayerNorm” perché Gemma usa RMSNorm; non è un errore, ma significa che alcune utility “centering writing weights” vengono skippate. Non blocca la pipeline.
+
+Sto lavorando in bf16 su GPU (L4) quindi attenzione alle tolleranze e alle conversioni float32 per statistiche.
+
+Piano di implementazione (dettagli, senza ambiguità)
+
+Implementare tre moduli principali, pensando già a performance e a batch:
+
+A) Hook & Extraction
+
+Caricare HookedTransformer.from_pretrained("google/gemma-2-2b", device="cuda", dtype=torch.bfloat16, trust_remote_code=True).
+
+Per estrazione attivazioni usare run_with_cache con names_filter aggressivo per cachare solo ciò che serve:
+
+in profiling: per ogni layer L, almeno blocks.L.mlp.hook_post. Se serve anche la parte “scrittura”, cache anche blocks.L.hook_mlp_out e (se necessario) blocks.L.ln2_post.*.
+
+non cachare tutto il modello, altrimenti esplode memoria.
+
+Scegliere se lavorare su teacher forcing (solo prompt) o su generazione autoregressiva; per iniziare: teacher forcing sul prompt base e su probe prompts è sufficiente per profilare firme stabili su token.
+
+B) Metrics & Signatures
+Replicare le metriche che uso nel CLT, adattate ai neuroni:
+
+per neurone×prompt: activation_max, activation_sum, peak_token, peak_token_idx, densità sopra soglia (es. sopra il 75° percentile dei valori per neurone nel prompt), sparsity ratio (max-mean)/max se max≠0.
+
+cross-prompt per neurone:
+
+peak consistency su token semantici vs funzionali
+
+n_distinct_peaks (quanti token diversi diventano picco su probe diverse)
+
+func_vs_sem % (quante volte picca su token funzionali)
+
+semantic_confidence / functional_confidence
+
+Nota: in neuron space i valori non saranno “sparse con zeri duri” come CLT, quindi soglie e distribuzioni cambieranno; implementare metriche in modo robusto (IQR z-score ecc.) e parametrizzare le soglie.
+
+Token categorization:
+
+mantenere il mio schema “semantic vs functional tokens”
+
+per token funzionali (“is”, “the”, “,” ecc.) calcolare target semantic token entro finestra ±5 (config) e direzione (forward/bidirectional) per nominare “Say(X)”.
+
+C) Interventions
+Implementare interventi su hook_post con una Hook function:
+
+Modalità multiply: post[..., i] = M * post[..., i] per layer L e pos p (o per range di pos: es. solo last token, o tutte le pos del prompt, o anche generated tokens se si fa generazione).
+
+Modalità ablate: M=0.
+
+Modalità inject: post[..., i] = value (value può venire da stored activation misurata su un altro prompt, oppure da un valore scelto come k*sigma).
+
+Supportare “position = -1” per ultimo token, e slicing su pos.
+
+Validazione:
+
+Confrontare next-token logits e/o completamento generato baseline vs steered.
+
+Se si fa generazione, decidere se implementare freeze attention patterns. Non è obbligatorio nella prima versione perché l’obiettivo è replicare “profiling + steering” (non edge). Se più avanti serve, implementare un “constrained patching” alla TL bloccando pattern QK o cache KV (ma per ora non è requisito).
+
+Cosa voglio ottenere come output (formato dati)
+
+Voglio un CSV/JSON simile al mio export CLT “ENRICHED”, ma neuron-space:
+
+identificatore neurone: layer, index (0..9215), eventualmente position
+
+per ogni prompt: activation_max, activation_sum, peak_token, peak_token_idx, ctx_idx (se utile), e eventuali metriche aggiuntive
+
+poi un file aggregato con firme cross-prompt e label euristiche (Say(X), Texas, (containing) related, ecc.)
+
+strumenti minimi per ispezione: stampa dei top neuroni per layer/pos, e report riassuntivo per supernodi.
+
+Debug già risolto (non perdere tempo)
+
+Il mismatch iniziale hook_post @ W_out != hook_mlp_out era dovuto al fatto che Gemma-2 applica ln2_post dopo la proiezione; rifacendo cache includendo blocks.L.ln2_post.* e applicando model.blocks[L].ln2_post(pre_norm) si ottiene uguaglianza esatta (errore 0.0). Quindi: hook_post è correttamente “il vettore MLP pre-proiezione” (post gating) e va usato come attivazione neurone.

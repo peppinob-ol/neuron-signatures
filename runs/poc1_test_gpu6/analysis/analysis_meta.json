@@ -1,0 +1,15 @@
+{
+  "created_at_utc": "2025-12-16T12:57:14Z",
+  "run_dir": "runs/poc1_test_gpu6",
+  "mode": "peaks",
+  "n_prompts": 5,
+  "n_layers": 26,
+  "d_mlp": 9216,
+  "n_neurons_total": 239616,
+  "top_k": 3,
+  "cumulative_threshold": null,
+  "outputs": {
+    "neurons_aggregated_csv": "neurons_aggregated.csv",
+    "top_neurons_json": "top_neurons.json"
+  }
+}

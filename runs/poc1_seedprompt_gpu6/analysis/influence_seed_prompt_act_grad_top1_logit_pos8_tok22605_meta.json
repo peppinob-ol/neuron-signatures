@@ -1,0 +1,31 @@
+{
+  "created_at_utc": "2025-12-16T16:39:36Z",
+  "run_dir": "runs/poc1_seedprompt_gpu6",
+  "mode": "influence",
+  "scope": "single_prompt",
+  "prompt_selector": "probe_id:seed_prompt",
+  "prompt_index": 0,
+  "prompt_id": "seed_prompt",
+  "metric": "act_grad",
+  "target_mode": "top1_logit",
+  "target_token_source": "auto_top1",
+  "target_token_id": 22605,
+  "target_token_ascii": " Austin",
+  "target_pos": 8,
+  "ctx_idx": 8,
+  "n_layers": 26,
+  "d_mlp": 9216,
+  "n_neurons_total": 239616,
+  "selected_count": 239616,
+  "top_k_arg": 200,
+  "cumulative_threshold": 1.0,
+  "model_name": "google/gemma-2-2b",
+  "device": "cuda",
+  "model_dtype": "bf16",
+  "outputs": {
+    "top_neurons_json": "influence_seed_prompt_act_grad_top1_logit_pos8_tok22605.json",
+    "top_neurons_csv": "influence_seed_prompt_act_grad_top1_logit_pos8_tok22605.csv"
+  },
+  "act_grad_unused_layers": [],
+  "act_grad_unused_layers_count": 0
+}

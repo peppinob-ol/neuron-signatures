@@ -63,3 +63,4 @@ def safe_print(msg: str) -> None:
     safe_msg = "".join(ch if ord(ch) < 128 else "?" for ch in msg)
     print(safe_msg)
 
+

@@ -5,4 +5,9 @@ transformers>=4.40.0
 accelerate>=0.27.0
 safetensors>=0.4.0
 tqdm>=4.60.0
+prompt-toolkit>=3.0.0
+pandas>=2.0.0
+plotly>=5.0.0
+streamlit>=1.30.0
+streamlit-shortcuts>=0.1.0
 

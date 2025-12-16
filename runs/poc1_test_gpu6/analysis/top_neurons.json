@@ -1,0 +1,47 @@
+[
+  {
+    "layer": 0,
+    "neuron": 5537,
+    "mean_peak_abs": 17.865625381469727,
+    "std_peak_abs": 7.534112453460693,
+    "max_peak_abs": 22.25,
+    "frac_peak_functional": 1.0,
+    "mode_peak_token_id": 235265,
+    "mode_peak_token_ascii": ".",
+    "mode_peak_token_count": 4,
+    "n_unique_peak_token_id": 2,
+    "mode_peak_ctx_idx": 9,
+    "mode_peak_ctx_count": 2,
+    "n_unique_peak_ctx_idx": 4
+  },
+  {
+    "layer": 9,
+    "neuron": 8303,
+    "mean_peak_abs": 15.274999618530273,
+    "std_peak_abs": 1.3119641542434692,
+    "max_peak_abs": 17.75,
+    "frac_peak_functional": 0.0,
+    "mode_peak_token_id": 6127,
+    "mode_peak_token_ascii": "entity",
+    "mode_peak_token_count": 3,
+    "n_unique_peak_token_id": 3,
+    "mode_peak_ctx_idx": 1,
+    "mode_peak_ctx_count": 5,
+    "n_unique_peak_ctx_idx": 1
+  },
+  {
+    "layer": 0,
+    "neuron": 2569,
+    "mean_peak_abs": 14.875,
+    "std_peak_abs": 1.4911195039749146,
+    "max_peak_abs": 17.375,
+    "frac_peak_functional": 1.0,
+    "mode_peak_token_id": 603,
+    "mode_peak_token_ascii": " is",
+    "mode_peak_token_count": 5,
+    "n_unique_peak_token_id": 1,
+    "mode_peak_ctx_idx": 9,
+    "mode_peak_ctx_count": 2,
+    "n_unique_peak_ctx_idx": 3
+  }
+]

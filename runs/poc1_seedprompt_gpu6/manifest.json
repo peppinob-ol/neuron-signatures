@@ -1,0 +1,261 @@
+{
+  "format_version": 1,
+  "created_at_utc": "2025-12-16T14:22:52Z",
+  "model_name": "google/gemma-2-2b",
+  "hook_name": "blocks.*.mlp.hook_post",
+  "n_layers": 26,
+  "d_mlp": 9216,
+  "run_device": "cuda",
+  "model_dtype": "bfloat16",
+  "save_dtype": "bfloat16",
+  "prepend_bos": true,
+  "prompts": [
+    {
+      "probe_id": "seed_prompt",
+      "text": "The capital of the state containing Dallas is",
+      "token_ids": [
+        2,
+        651,
+        6037,
+        576,
+        573,
+        2329,
+        10751,
+        26865,
+        603
+      ],
+      "tokens_ascii": [
+        "<bos>",
+        "The",
+        " capital",
+        " of",
+        " the",
+        " state",
+        " containing",
+        " Dallas",
+        " is"
+      ],
+      "seq_len": 9,
+      "activation_tensor_key": "seed_prompt",
+      "activation_tensor_shape": [
+        26,
+        9,
+        9216
+      ],
+      "activation_tensor_dtype": "bfloat16"
+    },
+    {
+      "probe_id": "probe_0_Dallas",
+      "text": "entity: A city in Texas, USA is Dallas",
+      "token_ids": [
+        2,
+        6127,
+        235292,
+        586,
+        3413,
+        575,
+        9447,
+        235269,
+        7253,
+        603,
+        26865
+      ],
+      "tokens_ascii": [
+        "<bos>",
+        "entity",
+        ":",
+        " A",
+        " city",
+        " in",
+        " Texas",
+        ",",
+        " USA",
+        " is",
+        " Dallas"
+      ],
+      "seq_len": 11,
+      "activation_tensor_key": "probe_0_Dallas",
+      "activation_tensor_shape": [
+        26,
+        11,
+        9216
+      ],
+      "activation_tensor_dtype": "bfloat16"
+    },
+    {
+      "probe_id": "probe_1_Austin",
+      "text": "entity: The capital city of Texas is Austin",
+      "token_ids": [
+        2,
+        6127,
+        235292,
+        714,
+        6037,
+        3413,
+        576,
+        9447,
+        603,
+        22605
+      ],
+      "tokens_ascii": [
+        "<bos>",
+        "entity",
+        ":",
+        " The",
+        " capital",
+        " city",
+        " of",
+        " Texas",
+        " is",
+        " Austin"
+      ],
+      "seq_len": 10,
+      "activation_tensor_key": "probe_1_Austin",
+      "activation_tensor_shape": [
+        26,
+        10,
+        9216
+      ],
+      "activation_tensor_dtype": "bfloat16"
+    },
+    {
+      "probe_id": "probe_2_Texas",
+      "text": "entity: A state in the United States is Texas",
+      "token_ids": [
+        2,
+        6127,
+        235292,
+        586,
+        2329,
+        575,
+        573,
+        3520,
+        3858,
+        603,
+        9447
+      ],
+      "tokens_ascii": [
+        "<bos>",
+        "entity",
+        ":",
+        " A",
+        " state",
+        " in",
+        " the",
+        " United",
+        " States",
+        " is",
+        " Texas"
+      ],
+      "seq_len": 11,
+      "activation_tensor_key": "probe_2_Texas",
+      "activation_tensor_shape": [
+        26,
+        11,
+        9216
+      ],
+      "activation_tensor_dtype": "bfloat16"
+    },
+    {
+      "probe_id": "probe_3_the_capital_city",
+      "text": "attribute: The primary city serving as the seat of government for a state is the capital city",
+      "token_ids": [
+        2,
+        14831,
+        235292,
+        714,
+        7920,
+        3413,
+        14825,
+        685,
+        573,
+        10250,
+        576,
+        3838,
+        604,
+        476,
+        2329,
+        603,
+        573,
+        6037,
+        3413
+      ],
+      "tokens_ascii": [
+        "<bos>",
+        "attribute",
+        ":",
+        " The",
+        " primary",
+        " city",
+        " serving",
+        " as",
+        " the",
+        " seat",
+        " of",
+        " government",
+        " for",
+        " a",
+        " state",
+        " is",
+        " the",
+        " capital",
+        " city"
+      ],
+      "seq_len": 19,
+      "activation_tensor_key": "probe_3_the_capital_city",
+      "activation_tensor_shape": [
+        26,
+        19,
+        9216
+      ],
+      "activation_tensor_dtype": "bfloat16"
+    },
+    {
+      "probe_id": "probe_4_the_state_containing",
+      "text": "relationship: the state in which a city is located is the state containing",
+      "token_ids": [
+        2,
+        62633,
+        235292,
+        573,
+        2329,
+        575,
+        948,
+        476,
+        3413,
+        603,
+        7023,
+        603,
+        573,
+        2329,
+        10751
+      ],
+      "tokens_ascii": [
+        "<bos>",
+        "relationship",
+        ":",
+        " the",
+        " state",
+        " in",
+        " which",
+        " a",
+        " city",
+        " is",
+        " located",
+        " is",
+        " the",
+        " state",
+        " containing"
+      ],
+      "seq_len": 15,
+      "activation_tensor_key": "probe_4_the_state_containing",
+      "activation_tensor_shape": [
+        26,
+        15,
+        9216
+      ],
+      "activation_tensor_dtype": "bfloat16"
+    }
+  ],
+  "activations_file": "activations.pt"
+}
