@@ -64,16 +64,17 @@ def _load_top_neurons(analysis_dir: Path) -> Optional[List[Dict[str, Any]]]:
     return None
 
 
-def _list_influence_json_files(analysis_dir: Path) -> List[Path]:
+def _list_influence_rank_files(analysis_dir: Path) -> List[Path]:
     """
-    List influence ranking JSON files in analysis_dir.
+    List influence ranking files in analysis_dir.
 
-    We include files named `influence_*.json` and exclude `*_meta.json`.
+    We prefer CSV (`influence_*.csv`) when present, but will also list JSON
+    (`influence_*.json`) while excluding `*_meta.json`.
     Sorted by modification time (newest first).
     """
     if not analysis_dir.exists():
         return []
-    files = list(analysis_dir.glob("influence_*.json"))
+    files = list(analysis_dir.glob("influence_*.csv")) + list(analysis_dir.glob("influence_*.json"))
     out: List[Path] = []
     for p in files:
         if p.name.endswith("_meta.json"):
@@ -91,6 +92,54 @@ def _load_influence_ranking(path: Path) -> Optional[List[Dict[str, Any]]]:
     if isinstance(data, list):
         return data
     return None
+
+
+@st.cache_data(show_spinner=False)
+def _load_influence_csv_cached(path_str: str) -> Dict[str, Any]:
+    """
+    Load an influence CSV produced by POC2 into compact tensors for filtering.
+
+    Returns:
+        dict with keys: layer_i, neuron_i, activation, influence, abs_influence, meta
+    """
+    import csv
+
+    layers: List[int] = []
+    neurons: List[int] = []
+    activations: List[float] = []
+    influences: List[float] = []
+    abs_influences: List[float] = []
+    meta: Dict[str, Any] = {}
+
+    with open(path_str, "r", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if not meta:
+                # Small prompt-level metadata from the first row (repeated in file).
+                meta = {
+                    "prompt_id": str(row.get("prompt_id", "")),
+                    "target_token_id": int(row.get("target_token_id", 0) or 0),
+                    "target_token_ascii": str(row.get("target_token_ascii", "")),
+                    "target_pos": int(row.get("target_pos", 0) or 0),
+                    "ctx_idx": int(row.get("ctx_idx", 0) or 0),
+                    "metric": str(row.get("metric", "")),
+                    "target_mode": str(row.get("target_mode", "")),
+                }
+
+            layers.append(int(row["layer"]))
+            neurons.append(int(row["neuron"]))
+            activations.append(float(row["activation"]))
+            influences.append(float(row["influence"]))
+            abs_influences.append(float(row["abs_influence"]))
+
+    return {
+        "layer_i": torch.tensor(layers, dtype=torch.int16),
+        "neuron_i": torch.tensor(neurons, dtype=torch.int32),
+        "activation": torch.tensor(activations, dtype=torch.float32),
+        "influence": torch.tensor(influences, dtype=torch.float32),
+        "abs_influence": torch.tensor(abs_influences, dtype=torch.float32),
+        "meta": meta,
+    }
 
 
 def _get_prompt_entry(manifest: Dict[str, Any], prompt_id: str) -> Dict[str, Any]:
@@ -230,31 +279,31 @@ def main() -> None:
         if st.session_state.get("arrow_keys_candidates", False) and st.session_state.get("_candidate_pairs"):
             st.session_state.candidate_idx = max(int(st.session_state.candidate_idx) - 1, 0)
             _apply_candidate_idx()
-        else:
-            st.session_state.layer = max(int(st.session_state.layer) - 1, 0)
+            return
+        st.session_state.layer = max(int(st.session_state.layer) - 1, 0)
 
     def kb_layer_down() -> None:
         if st.session_state.get("arrow_keys_candidates", False) and st.session_state.get("_candidate_pairs"):
             pairs = list(st.session_state.get("_candidate_pairs", []))
             st.session_state.candidate_idx = min(int(st.session_state.candidate_idx) + 1, len(pairs) - 1)
             _apply_candidate_idx()
-        else:
-            st.session_state.layer = min(int(st.session_state.layer) + 1, int(st.session_state._max_layer))
+            return
+        st.session_state.layer = min(int(st.session_state.layer) + 1, int(st.session_state._max_layer))
 
     def kb_neuron_left() -> None:
         if st.session_state.get("arrow_keys_candidates", False) and st.session_state.get("_candidate_pairs"):
             st.session_state.candidate_idx = max(int(st.session_state.candidate_idx) - 10, 0)
             _apply_candidate_idx()
-        else:
-            st.session_state.neuron = max(int(st.session_state.neuron) - 1, 0)
+            return
+        st.session_state.neuron = max(int(st.session_state.neuron) - 1, 0)
 
     def kb_neuron_right() -> None:
         if st.session_state.get("arrow_keys_candidates", False) and st.session_state.get("_candidate_pairs"):
             pairs = list(st.session_state.get("_candidate_pairs", []))
             st.session_state.candidate_idx = min(int(st.session_state.candidate_idx) + 10, len(pairs) - 1)
             _apply_candidate_idx()
-        else:
-            st.session_state.neuron = min(int(st.session_state.neuron) + 1, int(st.session_state._max_neuron))
+            return
+        st.session_state.neuron = min(int(st.session_state.neuron) + 1, int(st.session_state._max_neuron))
 
     # Register shortcuts (only if installed and enabled).
     # streamlit-shortcuts binds keyboard keys to Streamlit elements *by key*,
@@ -279,7 +328,7 @@ def main() -> None:
 
     st.sidebar.header("Neuron selection")
     top_neurons = _load_top_neurons(analysis_dir) if analysis_dir.exists() else None
-    influence_files = _list_influence_json_files(analysis_dir)
+    influence_files = _list_influence_rank_files(analysis_dir)
 
     selection_modes = ["manual"]
     if top_neurons:
@@ -322,7 +371,7 @@ def main() -> None:
         st.sidebar.caption("Source: peaks ranking from analysis/top_neurons.json")
 
     elif st.session_state.selection_mode == "influence_json":
-        # Pick influence file
+        # Pick influence file (prefer CSV if available)
         def fmt_file(p: Path) -> str:
             return p.name
 
@@ -337,17 +386,66 @@ def main() -> None:
         file_idx = int(st.session_state.influence_file_idx)
         file_idx = max(0, min(file_idx, len(influence_files) - 1))
         influence_path = influence_files[file_idx]
-        infl = _load_influence_ranking(influence_path) or []
-        limited = infl[: int(top_k_limit)]
-        candidates = limited
-        for n in limited:
-            layer_i = int(n.get("layer", 0))
-            neuron_i = int(n.get("neuron", 0))
-            abs_inf = float(n.get("abs_influence", 0.0))
-            tok = str(n.get("target_token_ascii", ""))
-            candidate_pairs.append((layer_i, neuron_i))
-            candidate_labels.append(f"L{layer_i} N{neuron_i} | abs_influence={abs_inf:.6g} | target={tok}")
-        st.sidebar.caption(f"Source: {influence_path.name}")
+        if influence_path.suffix.lower() == ".csv":
+            data = _load_influence_csv_cached(str(influence_path))
+
+            metric = st.sidebar.selectbox(
+                "influence_filter_metric",
+                options=["abs_influence", "influence", "activation"],
+                index=0,
+                help="Filter the influence-ranked neurons by a scalar column.",
+            )
+            values = data[metric]
+            v_min = float(values.min().item())
+            v_max = float(values.max().item())
+            lo, hi = st.sidebar.slider(
+                "influence_filter_range",
+                min_value=v_min,
+                max_value=v_max,
+                value=(v_min, v_max),
+                format="%.6g",
+                help="Keep neurons whose selected metric is within this range.",
+            )
+
+            mask = (values >= float(lo)) & (values <= float(hi))
+            idx_all = torch.nonzero(mask, as_tuple=False).squeeze(-1)
+            n_total = int(values.numel())
+            n_keep = int(idx_all.numel())
+            k_show = min(int(top_k_limit), n_keep)
+            idx = idx_all[:k_show]
+
+            st.sidebar.caption(
+                f"Source: {influence_path.name} | kept {n_keep}/{n_total} (showing {k_show})"
+            )
+
+            layer_t = data["layer_i"][idx].tolist()
+            neuron_t = data["neuron_i"][idx].tolist()
+            act_t = data["activation"][idx].tolist()
+            inf_t = data["influence"][idx].tolist()
+            abs_inf_t = data["abs_influence"][idx].tolist()
+            metric_t = data[metric][idx].tolist()
+
+            for layer_i, neuron_i, act_v, inf_v, abs_v, m_v in zip(
+                layer_t, neuron_t, act_t, inf_t, abs_inf_t, metric_t
+            ):
+                candidate_pairs.append((int(layer_i), int(neuron_i)))
+                candidate_labels.append(
+                    f"L{int(layer_i)} N{int(neuron_i)} | {metric}={float(m_v):.6g} | abs_inf={float(abs_v):.6g} | act={float(act_v):.6g}"
+                )
+
+        else:
+            st.sidebar.warning("Influence JSON can be very large; prefer the CSV for filtering.")
+            infl = _load_influence_ranking(influence_path) or []
+            limited = infl[: int(top_k_limit)]
+            candidates = limited
+            for n in limited:
+                layer_i = int(n.get("layer", 0))
+                neuron_i = int(n.get("neuron", 0))
+                abs_inf = float(n.get("abs_influence", 0.0))
+                tok = str(n.get("target_token_ascii", ""))
+                candidate_pairs.append((layer_i, neuron_i))
+                candidate_labels.append(f"L{layer_i} N{neuron_i} | abs_influence={abs_inf:.6g} | target={tok}")
+            st.sidebar.caption(f"Source: {influence_path.name} (showing first {len(limited)})")
 
     # Persist candidate pairs for keyboard callbacks
     st.session_state._candidate_pairs = candidate_pairs
@@ -362,6 +460,12 @@ def main() -> None:
     )
 
     if candidate_pairs:
+        # Keep indices in range if filters changed.
+        if int(st.session_state.get("candidate_idx", 0)) >= len(candidate_pairs):
+            st.session_state.candidate_idx = 0
+        if int(st.session_state.get("candidate_choice_idx", 0)) >= len(candidate_pairs):
+            st.session_state.candidate_choice_idx = 0
+
         # Candidate picker
         def apply_candidate_choice() -> None:
             st.session_state.candidate_idx = int(st.session_state.get("candidate_choice_idx", 0))
