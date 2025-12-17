@@ -1,0 +1,222 @@
+{
+  "created_at_utc": "2025-12-17T05:08:51Z",
+  "model_name": "google/gemma-2-2b",
+  "prompt": "The capital of the state containing Dallas is",
+  "source_prompt": "The capital of the state containing San Francisco is",
+  "control_source_prompt": null,
+  "layer": 22,
+  "pos_mode": "token",
+  "pos_token_dest": " Dallas",
+  "pos_token_src": " San",
+  "dest_pos": 7,
+  "src_pos": 7,
+  "target_token": " Sacramento",
+  "target_id": 43939,
+  "alt_token": " Austin",
+  "alt_id": 22605,
+  "screen_topk_neurons": 2000,
+  "screen_eval_k": 50,
+  "screen_sign": "pos",
+  "intervention_mode": "patch_delta_from_source",
+  "baseline": {
+    "logit_target": 19.75,
+    "logit_alt": 25.875,
+    "logit_diff": -6.125,
+    "topk": [
+      {
+        "token": " Austin",
+        "prob": 0.3169286847114563,
+        "id": 22605
+      },
+      {
+        "token": " the",
+        "prob": 0.11659155040979385,
+        "id": 573
+      },
+      {
+        "token": " ",
+        "prob": 0.08013211935758591,
+        "id": 235248
+      },
+      {
+        "token": " Fort",
+        "prob": 0.04289163276553154,
+        "id": 9778
+      },
+      {
+        "token": " Texas",
+        "prob": 0.04289163276553154,
+        "id": 9447
+      },
+      {
+        "token": ":",
+        "prob": 0.03340403735637665,
+        "id": 235292
+      },
+      {
+        "token": " a",
+        "prob": 0.02947896160185337,
+        "id": 476
+      },
+      {
+        "token": " Dallas",
+        "prob": 0.026015089824795723,
+        "id": 26865
+      },
+      {
+        "token": " called",
+        "prob": 0.022958237677812576,
+        "id": 3151
+      },
+      {
+        "token": " located",
+        "prob": 0.017879892140626907,
+        "id": 7023
+      }
+    ]
+  },
+  "ablation_screen_top10": [
+    {
+      "neuron": 8268,
+      "d_logit_diff": 0.125,
+      "logit_target": 19.75,
+      "logit_alt": 25.75
+    },
+    {
+      "neuron": 1260,
+      "d_logit_diff": 0.125,
+      "logit_target": 19.75,
+      "logit_alt": 25.75
+    },
+    {
+      "neuron": 4278,
+      "d_logit_diff": 0.125,
+      "logit_target": 19.75,
+      "logit_alt": 25.75
+    },
+    {
+      "neuron": 6645,
+      "d_logit_diff": 0.125,
+      "logit_target": 19.75,
+      "logit_alt": 25.75
+    },
+    {
+      "neuron": 3481,
+      "d_logit_diff": 0.125,
+      "logit_target": 19.75,
+      "logit_alt": 25.75
+    },
+    {
+      "neuron": 1725,
+      "d_logit_diff": 0.125,
+      "logit_target": 19.75,
+      "logit_alt": 25.75
+    },
+    {
+      "neuron": 8173,
+      "d_logit_diff": 0.125,
+      "logit_target": 19.75,
+      "logit_alt": 25.75
+    }
+  ],
+  "intervene_k": 7,
+  "alpha": 1.0,
+  "steered": {
+    "logit_target": 19.75,
+    "logit_alt": 25.75,
+    "logit_diff": -6.0,
+    "topk": [
+      {
+        "token": " Austin",
+        "prob": 0.29749220609664917,
+        "id": 22605
+      },
+      {
+        "token": " the",
+        "prob": 0.12401320040225983,
+        "id": 573
+      },
+      {
+        "token": " ",
+        "prob": 0.07521780580282211,
+        "id": 235248
+      },
+      {
+        "token": " Texas",
+        "prob": 0.04562190920114517,
+        "id": 9447
+      },
+      {
+        "token": " Fort",
+        "prob": 0.04026119038462639,
+        "id": 9778
+      },
+      {
+        "token": ":",
+        "prob": 0.03553037717938423,
+        "id": 235292
+      },
+      {
+        "token": " a",
+        "prob": 0.03135544806718826,
+        "id": 476
+      },
+      {
+        "token": " Dallas",
+        "prob": 0.024419646710157394,
+        "id": 26865
+      },
+      {
+        "token": " called",
+        "prob": 0.024419646710157394,
+        "id": 3151
+      },
+      {
+        "token": " located",
+        "prob": 0.019018039107322693,
+        "id": 7023
+      }
+    ],
+    "d_logit_target": 0.0,
+    "d_logit_alt": -0.125,
+    "d_logit_diff": 0.125
+  },
+  "intervene_neurons": [
+    8268,
+    1260,
+    4278,
+    6645,
+    3481,
+    1725,
+    8173
+  ],
+  "intervention_deltas": {
+    "dest_values": [
+      -1.2265625,
+      -0.16015625,
+      -0.357421875,
+      -0.2373046875,
+      0.296875,
+      0.09814453125,
+      0.07275390625
+    ],
+    "src_values": [
+      -0.6484375,
+      -0.0294189453125,
+      -0.0103759765625,
+      -0.004791259765625,
+      -0.007720947265625,
+      -0.016357421875,
+      0.0284423828125
+    ],
+    "deltas": [
+      0.578125,
+      0.1307373046875,
+      0.3470458984375,
+      0.232513427734375,
+      -0.304595947265625,
+      -0.114501953125,
+      -0.0443115234375
+    ]
+  }
+}

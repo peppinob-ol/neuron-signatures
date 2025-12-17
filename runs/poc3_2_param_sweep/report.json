@@ -1,0 +1,902 @@
+{
+  "created_at_utc": "2025-12-17T05:29:03Z",
+  "model_name": "google/gemma-2-2b",
+  "prompt": "The capital of the state containing Dallas is",
+  "source_prompt": "The capital of the state containing San Francisco is",
+  "control_source_prompt": null,
+  "pos_mode": "token",
+  "pos_token_dest": " Dallas",
+  "pos_token_src": " San",
+  "target_token": " Sacramento",
+  "target_id": 43939,
+  "alt_token": " Austin",
+  "alt_id": 22605,
+  "selection_mode": "pos",
+  "layers": [
+    22
+  ],
+  "k_values": [
+    10,
+    30,
+    100,
+    300
+  ],
+  "alpha_values": [
+    0.5,
+    1.0,
+    2.0
+  ],
+  "results": [
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 10,
+      "alpha": 0.5,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 19.75,
+      "steered_logit_alt": 25.875,
+      "steered_logit_diff": -6.125,
+      "d_logit_target": 0.0,
+      "d_logit_alt": 0.0,
+      "d_logit_diff": 0.0,
+      "pred_effect": 0.09151414036750793,
+      "neuron_idxs": [
+        7568,
+        1363,
+        8604,
+        9013,
+        303,
+        6570,
+        7564,
+        5068,
+        4772,
+        3199
+      ],
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 10,
+      "alpha": 1.0,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 19.875,
+      "steered_logit_alt": 25.75,
+      "steered_logit_diff": -5.875,
+      "d_logit_target": 0.125,
+      "d_logit_alt": -0.125,
+      "d_logit_diff": 0.25,
+      "pred_effect": 0.18302828073501587,
+      "neuron_idxs": [
+        7568,
+        1363,
+        8604,
+        9013,
+        303,
+        6570,
+        7564,
+        5068,
+        4772,
+        3199
+      ],
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 10,
+      "alpha": 2.0,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 20.0,
+      "steered_logit_alt": 25.875,
+      "steered_logit_diff": -5.875,
+      "d_logit_target": 0.25,
+      "d_logit_alt": 0.0,
+      "d_logit_diff": 0.25,
+      "pred_effect": 0.36605656147003174,
+      "neuron_idxs": [
+        7568,
+        1363,
+        8604,
+        9013,
+        303,
+        6570,
+        7564,
+        5068,
+        4772,
+        3199
+      ],
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 30,
+      "alpha": 0.5,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 19.875,
+      "steered_logit_alt": 25.75,
+      "steered_logit_diff": -5.875,
+      "d_logit_target": 0.125,
+      "d_logit_alt": -0.125,
+      "d_logit_diff": 0.25,
+      "pred_effect": 0.18847879767417908,
+      "neuron_idxs": [
+        7568,
+        1363,
+        8604,
+        9013,
+        303,
+        6570,
+        7564,
+        5068,
+        4772,
+        3199,
+        6922,
+        6081,
+        8725,
+        7150,
+        3328,
+        6094,
+        5535,
+        4456,
+        4490,
+        9076,
+        1598,
+        3524,
+        782,
+        460,
+        6844,
+        6475,
+        3555,
+        6464,
+        2423,
+        2920
+      ],
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 30,
+      "alpha": 1.0,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 20.0,
+      "steered_logit_alt": 25.875,
+      "steered_logit_diff": -5.875,
+      "d_logit_target": 0.25,
+      "d_logit_alt": 0.0,
+      "d_logit_diff": 0.25,
+      "pred_effect": 0.37695759534835815,
+      "neuron_idxs": [
+        7568,
+        1363,
+        8604,
+        9013,
+        303,
+        6570,
+        7564,
+        5068,
+        4772,
+        3199,
+        6922,
+        6081,
+        8725,
+        7150,
+        3328,
+        6094,
+        5535,
+        4456,
+        4490,
+        9076,
+        1598,
+        3524,
+        782,
+        460,
+        6844,
+        6475,
+        3555,
+        6464,
+        2423,
+        2920
+      ],
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 30,
+      "alpha": 2.0,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 20.25,
+      "steered_logit_alt": 25.75,
+      "steered_logit_diff": -5.5,
+      "d_logit_target": 0.5,
+      "d_logit_alt": -0.125,
+      "d_logit_diff": 0.625,
+      "pred_effect": 0.7539151906967163,
+      "neuron_idxs": [
+        7568,
+        1363,
+        8604,
+        9013,
+        303,
+        6570,
+        7564,
+        5068,
+        4772,
+        3199,
+        6922,
+        6081,
+        8725,
+        7150,
+        3328,
+        6094,
+        5535,
+        4456,
+        4490,
+        9076,
+        1598,
+        3524,
+        782,
+        460,
+        6844,
+        6475,
+        3555,
+        6464,
+        2423,
+        2920
+      ],
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 100,
+      "alpha": 0.5,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 20.125,
+      "steered_logit_alt": 25.75,
+      "steered_logit_diff": -5.625,
+      "d_logit_target": 0.375,
+      "d_logit_alt": -0.125,
+      "d_logit_diff": 0.5,
+      "pred_effect": 0.3999481499195099,
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 100,
+      "alpha": 1.0,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 20.375,
+      "steered_logit_alt": 25.75,
+      "steered_logit_diff": -5.375,
+      "d_logit_target": 0.625,
+      "d_logit_alt": -0.125,
+      "d_logit_diff": 0.75,
+      "pred_effect": 0.7998962998390198,
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 100,
+      "alpha": 2.0,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 21.0,
+      "steered_logit_alt": 25.75,
+      "steered_logit_diff": -4.75,
+      "d_logit_target": 1.25,
+      "d_logit_alt": -0.125,
+      "d_logit_diff": 1.375,
+      "pred_effect": 1.5997925996780396,
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 300,
+      "alpha": 0.5,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 20.375,
+      "steered_logit_alt": 25.75,
+      "steered_logit_diff": -5.375,
+      "d_logit_target": 0.625,
+      "d_logit_alt": -0.125,
+      "d_logit_diff": 0.75,
+      "pred_effect": 0.7324932217597961,
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 300,
+      "alpha": 1.0,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 21.0,
+      "steered_logit_alt": 25.75,
+      "steered_logit_diff": -4.75,
+      "d_logit_target": 1.25,
+      "d_logit_alt": -0.125,
+      "d_logit_diff": 1.375,
+      "pred_effect": 1.4649864435195923,
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    },
+    {
+      "success": true,
+      "layer": 22,
+      "dest_pos": 7,
+      "src_pos": 7,
+      "intervene_k_actual": 300,
+      "alpha": 2.0,
+      "baseline_logit_target": 19.75,
+      "baseline_logit_alt": 25.875,
+      "baseline_logit_diff": -6.125,
+      "steered_logit_target": 21.625,
+      "steered_logit_alt": 25.625,
+      "steered_logit_diff": -4.0,
+      "d_logit_target": 1.875,
+      "d_logit_alt": -0.25,
+      "d_logit_diff": 2.125,
+      "pred_effect": 2.9299728870391846,
+      "top10_pred": [
+        {
+          "neuron": 7568,
+          "pred": 0.03011453151702881
+        },
+        {
+          "neuron": 1363,
+          "pred": 0.025845259428024292
+        },
+        {
+          "neuron": 8604,
+          "pred": 0.018645823001861572
+        },
+        {
+          "neuron": 9013,
+          "pred": 0.017838478088378906
+        },
+        {
+          "neuron": 303,
+          "pred": 0.01769338920712471
+        },
+        {
+          "neuron": 6570,
+          "pred": 0.01723766326904297
+        },
+        {
+          "neuron": 7564,
+          "pred": 0.014890767633914948
+        },
+        {
+          "neuron": 5068,
+          "pred": 0.013900458812713623
+        },
+        {
+          "neuron": 4772,
+          "pred": 0.013881921768188477
+        },
+        {
+          "neuron": 3199,
+          "pred": 0.012979984283447266
+        }
+      ],
+      "source": "main"
+    }
+  ],
+  "best_result": {
+    "layer": 22,
+    "intervene_k": 300,
+    "alpha": 2.0,
+    "d_logit_diff": 2.125,
+    "pred_effect": 2.9299728870391846
+  }
+}

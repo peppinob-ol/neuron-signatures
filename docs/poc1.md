@@ -106,6 +106,60 @@ Next-token target (e.g., for a seed prompt that ends with `is`):
 python -m neuron_signatures.poc2_analyze_run --mode influence --run_dir runs/poc1_test_gpu6 --prompt_id probe_1_Austin --influence_metric act_grad --target_mode next_token --target_token \" Austin\" --target_pos -1
 ```
 
+## POC 3: Single-neuron steering smoke test
+
+This validates that you can causally intervene on a single MLP neuron and measure logit shifts.
+
+```bash
+python -m neuron_signatures.poc3_neuron_steering_smoketest \
+  --prompt "The capital of the state containing Dallas is" \
+  --target_token " Austin" \
+  --alt_token " Sacramento" \
+  --layer 22 --pos -1 --topk_neurons 20 --pick_rank 0
+```
+
+With patch-from-source (concept swap primitive):
+
+```bash
+python -m neuron_signatures.poc3_neuron_steering_smoketest \
+  --prompt "The capital of the state containing Dallas is" \
+  --source_prompt "The capital of the state containing San Francisco is" \
+  --target_token " Sacramento" \
+  --alt_token " Austin" \
+  --layer 22 --pos -1 --topk_neurons 50 --pick_rank 0 --do_patch_from_source
+```
+
+## POC 3.1: Multi-neuron concept swap (dense steering)
+
+This fixes POC3's quantization issues and implements multi-neuron interventions with ablation-based screening.
+
+Key improvements:
+- Always casts logits to float32 (fixes bf16 quantization false negatives)
+- Ablation screening: ranks neurons by measured causal effect on logit_diff
+- Multi-neuron interventions: patch/add/ablate a set of neurons
+- Delta-based patching: `a += alpha * (a_src - a_dest)` instead of `a = a_src`
+
+```bash
+python -m neuron_signatures.poc3_1_neuron_swap_smoketest \
+  --prompt "The capital of the state containing Dallas is" \
+  --source_prompt "The capital of the state containing San Francisco is" \
+  --target_token " Sacramento" \
+  --alt_token " Austin" \
+  --layer 22 --pos -1 \
+  --screen_topk_neurons 2000 \
+  --screen_eval_k 50 \
+  --intervene_k 10 \
+  --alpha 1.0 \
+  --intervention_mode patch_delta_from_source
+```
+
+Parameters:
+- `--screen_topk_neurons`: DLA proxy candidate pool (default: 2000)
+- `--screen_eval_k`: How many to ablation-test (default: 50)
+- `--intervene_k`: How many neurons to intervene on (default: 10)
+- `--alpha`: Scaling for delta-based interventions (default: 1.0)
+- `--intervention_mode`: `ablate_set`, `add_delta_set`, or `patch_delta_from_source`
+
 ## Streamlit EDA
 
 Start the interactive app:
@@ -149,11 +203,13 @@ Copy the prompts file you want to run:
 scp .\docs\probe_prompts_list.json nodo207:/home/giuseppe/neuron-signatures/docs/probe_prompts_list.json
 ```
 
-If you changed code locally (e.g. `poc2_analyze_run.py` / `neuron_influence.py`), and the nodo207 folder is not a git checkout, also sync the files:
+If you changed code locally (e.g. `poc2_analyze_run.py` / `neuron_influence.py` / POC3 scripts), and the nodo207 folder is not a git checkout, also sync the files:
 
 ```powershell
 scp .\neuron_signatures\poc2_analyze_run.py nodo207:/home/giuseppe/neuron-signatures/neuron_signatures/poc2_analyze_run.py
 scp .\neuron_signatures\neuron_influence.py nodo207:/home/giuseppe/neuron-signatures/neuron_signatures/neuron_influence.py
+scp .\neuron_signatures\poc3_neuron_steering_smoketest.py nodo207:/home/giuseppe/neuron-signatures/neuron_signatures/poc3_neuron_steering_smoketest.py
+scp .\neuron_signatures\poc3_1_neuron_swap_smoketest.py nodo207:/home/giuseppe/neuron-signatures/neuron_signatures/poc3_1_neuron_swap_smoketest.py
 ```
 
 ### 2) Run POC1 (dump activations) on nodo207
@@ -186,12 +242,33 @@ Influence on a single prompt, auto top-1 target at `target_pos` (writes `analysi
 ssh nodo207 "cd /home/giuseppe/neuron-signatures; export CUDA_VISIBLE_DEVICES=<GPU_ID>; ./.venv/bin/python -m neuron_signatures.poc2_analyze_run --mode influence --run_dir runs/poc1_seedprompt_gpu<GPU_ID> --prompt_id seed_prompt --target_mode top1_logit --target_pos -1 --influence_metric act_grad --cumulative_threshold 0.8 --device cuda --model_dtype bf16"
 ```
 
-### 4) Copy results back to Windows
+### 4) Run POC3 or POC3.1 on nodo207 (optional: neuron steering)
+
+**POC3 (single-neuron smoke test):**
+
+```powershell
+ssh nodo207 "cd /home/giuseppe/neuron-signatures; export CUDA_VISIBLE_DEVICES=<GPU_ID>; ./.venv/bin/python -m neuron_signatures.poc3_neuron_steering_smoketest --prompt 'The capital of the state containing Dallas is' --source_prompt 'The capital of the state containing San Francisco is' --target_token ' Sacramento' --alt_token ' Austin' --layer 22 --pos -1 --topk_neurons 50 --pick_rank 0 --do_patch_from_source --out_dir runs/poc3_gpu<GPU_ID>"
+```
+
+**POC3.1 (multi-neuron concept swap with ablation screening):**
+
+```powershell
+ssh nodo207 "cd /home/giuseppe/neuron-signatures; export CUDA_VISIBLE_DEVICES=<GPU_ID>; ./.venv/bin/python -m neuron_signatures.poc3_1_neuron_swap_smoketest --prompt 'The capital of the state containing Dallas is' --source_prompt 'The capital of the state containing San Francisco is' --target_token ' Sacramento' --alt_token ' Austin' --layer 22 --pos -1 --screen_topk_neurons 2000 --screen_eval_k 50 --intervene_k 10 --alpha 1.0 --intervention_mode patch_delta_from_source --out_dir runs/poc3_1_gpu<GPU_ID>"
+```
+
+### 5) Copy results back to Windows
 
 IMPORTANT: copy the whole run folder (not just `analysis/`), otherwise you will miss `manifest.json` and `activations.pt`.
 
 ```powershell
 scp -r nodo207:/home/giuseppe/neuron-signatures/runs/poc1_seedprompt_gpu<GPU_ID> .\runs\
+```
+
+For POC3/POC3.1 results:
+
+```powershell
+scp -r nodo207:/home/giuseppe/neuron-signatures/runs/poc3_gpu<GPU_ID> .\runs\
+scp -r nodo207:/home/giuseppe/neuron-signatures/runs/poc3_1_gpu<GPU_ID> .\runs\
 ```
 
 Note: the generic `scp -r nodo207:/path/to/...` example above is deprecated for nodo207; use the PowerShell commands in this section instead.
