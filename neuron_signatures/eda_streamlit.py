@@ -251,6 +251,16 @@ def main() -> None:
     if "_candidate_labels" not in st.session_state:
         st.session_state._candidate_labels = []
 
+    # Handle pending navigation from chart click (must happen BEFORE widgets render)
+    if "_pending_nav" in st.session_state:
+        nav = st.session_state._pending_nav
+        st.session_state.layer = int(nav["layer"])
+        st.session_state.neuron = int(nav["neuron"])
+        if "candidate_idx" in nav:
+            st.session_state.candidate_idx = int(nav["candidate_idx"])
+            st.session_state.candidate_choice_idx = int(nav["candidate_idx"])
+        del st.session_state._pending_nav
+
     # Store bounds for shortcut callbacks (kept in session_state for simplicity)
     st.session_state._max_layer = n_layers - 1
     st.session_state._max_neuron = d_mlp - 1
@@ -357,6 +367,8 @@ def main() -> None:
     candidates: List[Dict[str, Any]] = []
     candidate_pairs: List[Tuple[int, int]] = []
     candidate_labels: List[str] = []
+    # Store influence info keyed by (layer, neuron) for display in heatmap section
+    influence_info: Dict[Tuple[int, int], Dict[str, Any]] = {}
 
     if st.session_state.selection_mode == "peaks_top_neurons":
         limited = (top_neurons or [])[: int(top_k_limit)]
@@ -428,10 +440,17 @@ def main() -> None:
             for layer_i, neuron_i, act_v, inf_v, abs_v, m_v in zip(
                 layer_t, neuron_t, act_t, inf_t, abs_inf_t, metric_t
             ):
-                candidate_pairs.append((int(layer_i), int(neuron_i)))
+                key = (int(layer_i), int(neuron_i))
+                candidate_pairs.append(key)
                 candidate_labels.append(
                     f"L{int(layer_i)} N{int(neuron_i)} | {metric}={float(m_v):.6g} | abs_inf={float(abs_v):.6g} | act={float(act_v):.6g}"
                 )
+                influence_info[key] = {
+                    "activation": float(act_v),
+                    "influence": float(inf_v),
+                    "abs_influence": float(abs_v),
+                    "meta": data.get("meta", {}),
+                }
 
         else:
             st.sidebar.warning("Influence JSON can be very large; prefer the CSV for filtering.")
@@ -442,14 +461,29 @@ def main() -> None:
                 layer_i = int(n.get("layer", 0))
                 neuron_i = int(n.get("neuron", 0))
                 abs_inf = float(n.get("abs_influence", 0.0))
+                act_v = float(n.get("activation", 0.0))
+                inf_v = float(n.get("influence", 0.0))
                 tok = str(n.get("target_token_ascii", ""))
-                candidate_pairs.append((layer_i, neuron_i))
+                key = (layer_i, neuron_i)
+                candidate_pairs.append(key)
                 candidate_labels.append(f"L{layer_i} N{neuron_i} | abs_influence={abs_inf:.6g} | target={tok}")
+                influence_info[key] = {
+                    "activation": act_v,
+                    "influence": inf_v,
+                    "abs_influence": abs_inf,
+                    "meta": {
+                        "target_token_ascii": tok,
+                        "target_token_id": int(n.get("target_token_id", 0)),
+                        "target_pos": int(n.get("target_pos", 0)),
+                        "metric": str(n.get("metric", "")),
+                    },
+                }
             st.sidebar.caption(f"Source: {influence_path.name} (showing first {len(limited)})")
 
     # Persist candidate pairs for keyboard callbacks
     st.session_state._candidate_pairs = candidate_pairs
     st.session_state._candidate_labels = candidate_labels
+    st.session_state._influence_info = influence_info
 
     # Toggle: arrow keys browse candidates (if available)
     st.sidebar.checkbox(
@@ -535,7 +569,7 @@ def main() -> None:
     hm_col1, hm_col2 = st.columns([1, 1])
     with hm_col1:
         tokens_per_row = st.number_input("tokens_per_row", min_value=10, max_value=200, value=50, step=5)
-        show_values = st.checkbox("show_values_on_tokens", value=False)
+        show_values = st.checkbox("show_values_on_tokens", value=True)
         exclude_bos = st.checkbox("exclude_bos_from_max", value=True)
     with hm_col2:
         normalize_mode = st.selectbox("normalization", ["per_prompt", "global_across_prompts"], index=1)
@@ -588,6 +622,25 @@ def main() -> None:
     st.markdown(heatmap_html, unsafe_allow_html=True)
 
     st.markdown("### Stacked prompts heatmap (same neuron)")
+
+    # Show influence info if available for this neuron
+    inf_info = st.session_state.get("_influence_info", {}).get((layer, neuron))
+    if inf_info:
+        meta = inf_info.get("meta", {})
+        target_tok = meta.get("target_token_ascii", "")
+        target_pos = meta.get("target_pos", "")
+        metric_name = meta.get("metric", "act*grad")
+        inf_str = (
+            f"**Influence scores** | "
+            f"act={inf_info['activation']:.6g} | "
+            f"influence={inf_info['influence']:.6g} | "
+            f"abs_influence={inf_info['abs_influence']:.6g} | "
+            f"metric={metric_name}"
+        )
+        if target_tok:
+            inf_str += f" | target=`{target_tok}` (pos={target_pos})"
+        st.markdown(inf_str)
+
     prompt_series = [(pid, toks, tids, vals) for (pid, tids, toks, vals) in series]
     stacked_html = render_stacked_prompts_heatmap_html(
         prompt_series=prompt_series,
@@ -596,6 +649,273 @@ def main() -> None:
         title=f"Layer {layer} | Neuron {neuron}",
     )
     st.markdown(stacked_html, unsafe_allow_html=True)
+
+    # -------------------------------------------------------------------------
+    # Influence Distribution Charts (only when influence data is loaded)
+    # -------------------------------------------------------------------------
+    influence_info_all = st.session_state.get("_influence_info", {})
+    if influence_info_all and st.session_state.get("selection_mode") == "influence_json":
+        st.markdown("---")
+        st.markdown("### Influence Distribution (all neurons in ranking)")
+
+        # Build lists for charting
+        chart_layers: List[int] = []
+        chart_neurons: List[int] = []
+        chart_acts: List[float] = []
+        chart_infs: List[float] = []
+        chart_abs_infs: List[float] = []
+        for (l, n), info in influence_info_all.items():
+            chart_layers.append(l)
+            chart_neurons.append(n)
+            chart_acts.append(info["activation"])
+            chart_infs.append(info["influence"])
+            chart_abs_infs.append(info["abs_influence"])
+
+        if chart_layers:
+            # Compute ranks by abs_influence (descending)
+            sorted_idx = sorted(range(len(chart_abs_infs)), key=lambda i: -chart_abs_infs[i])
+            ranks = [0] * len(chart_abs_infs)
+            for rank, i in enumerate(sorted_idx, start=1):
+                ranks[i] = rank
+
+            # Selected neuron mask
+            is_selected = [(chart_layers[i] == layer and chart_neurons[i] == neuron) for i in range(len(chart_layers))]
+
+            # Chart controls
+            chart_cols = st.columns([1, 1, 1])
+            with chart_cols[0]:
+                chart_type = st.selectbox(
+                    "Chart type",
+                    ["layer_scatter", "act_vs_inf", "rank_bars"],
+                    index=0,
+                    key="infl_chart_type",
+                    help="layer_scatter: layer vs influence; act_vs_inf: activation vs influence; rank_bars: ranked bar chart",
+                )
+            with chart_cols[1]:
+                y_metric = st.selectbox(
+                    "Y metric",
+                    ["abs_influence", "influence", "activation"],
+                    index=0,
+                    key="infl_y_metric",
+                )
+            with chart_cols[2]:
+                show_top_n = st.number_input(
+                    "Show top N",
+                    min_value=10,
+                    max_value=len(chart_layers),
+                    value=min(200, len(chart_layers)),
+                    step=10,
+                    key="infl_show_top_n",
+                )
+
+            # Filter to top N by abs_influence
+            top_n = int(show_top_n)
+            top_indices = sorted_idx[:top_n]
+
+            # Prepare filtered data
+            f_layers = [chart_layers[i] for i in top_indices]
+            f_neurons = [chart_neurons[i] for i in top_indices]
+            f_acts = [chart_acts[i] for i in top_indices]
+            f_infs = [chart_infs[i] for i in top_indices]
+            f_abs_infs = [chart_abs_infs[i] for i in top_indices]
+            f_ranks = [ranks[i] for i in top_indices]
+            f_selected = [is_selected[i] for i in top_indices]
+
+            # Get y values based on metric
+            if y_metric == "abs_influence":
+                f_y = f_abs_infs
+            elif y_metric == "influence":
+                f_y = f_infs
+            else:
+                f_y = f_acts
+
+            # Build the chart
+            fig = go.Figure()
+
+            if chart_type == "layer_scatter":
+                # Scatter: x=layer (jittered), y=metric, color by layer
+                import random
+                random.seed(42)  # reproducible jitter
+                jitter = [random.uniform(-0.3, 0.3) for _ in f_layers]
+                x_jittered = [l + j for l, j in zip(f_layers, jitter)]
+
+                # Non-selected points
+                other_x = [x_jittered[i] for i in range(len(f_selected)) if not f_selected[i]]
+                other_y = [f_y[i] for i in range(len(f_selected)) if not f_selected[i]]
+                other_layers = [f_layers[i] for i in range(len(f_selected)) if not f_selected[i]]
+                other_neurons = [f_neurons[i] for i in range(len(f_selected)) if not f_selected[i]]
+                other_ranks = [f_ranks[i] for i in range(len(f_selected)) if not f_selected[i]]
+                other_acts = [f_acts[i] for i in range(len(f_selected)) if not f_selected[i]]
+                other_abs = [f_abs_infs[i] for i in range(len(f_selected)) if not f_selected[i]]
+
+                if other_x:
+                    fig.add_trace(go.Scatter(
+                        x=other_x,
+                        y=other_y,
+                        mode="markers",
+                        marker=dict(
+                            size=8,
+                            color=other_layers,
+                            colorscale="Viridis",
+                            opacity=0.7,
+                            colorbar=dict(title="Layer", x=1.02),
+                        ),
+                        text=[f"L{other_layers[i]} N{other_neurons[i]}<br>rank={other_ranks[i]}<br>act={other_acts[i]:.4g}<br>abs_inf={other_abs[i]:.4g}"
+                              for i in range(len(other_x))],
+                        hoverinfo="text",
+                        name="neurons",
+                        customdata=list(zip(other_layers, other_neurons)),
+                    ))
+
+                # Selected point (highlighted)
+                sel_x = [x_jittered[i] for i in range(len(f_selected)) if f_selected[i]]
+                sel_y = [f_y[i] for i in range(len(f_selected)) if f_selected[i]]
+                sel_layers = [f_layers[i] for i in range(len(f_selected)) if f_selected[i]]
+                sel_neurons = [f_neurons[i] for i in range(len(f_selected)) if f_selected[i]]
+                sel_ranks = [f_ranks[i] for i in range(len(f_selected)) if f_selected[i]]
+                if sel_x:
+                    fig.add_trace(go.Scatter(
+                        x=sel_x,
+                        y=sel_y,
+                        mode="markers",
+                        marker=dict(size=16, color="red", symbol="star", line=dict(width=2, color="black")),
+                        text=[f"SELECTED: L{sel_layers[i]} N{sel_neurons[i]}<br>rank={sel_ranks[i]}" for i in range(len(sel_x))],
+                        hoverinfo="text",
+                        name="selected",
+                    ))
+
+                fig.update_layout(
+                    title=f"Layer vs {y_metric} (top {top_n})",
+                    xaxis_title="Layer",
+                    yaxis_title=y_metric,
+                    height=450,
+                )
+
+            elif chart_type == "act_vs_inf":
+                # Scatter: x=activation, y=influence, color by layer
+                other_idx = [i for i in range(len(f_selected)) if not f_selected[i]]
+                sel_idx = [i for i in range(len(f_selected)) if f_selected[i]]
+
+                if other_idx:
+                    fig.add_trace(go.Scatter(
+                        x=[f_acts[i] for i in other_idx],
+                        y=[f_infs[i] for i in other_idx],
+                        mode="markers",
+                        marker=dict(
+                            size=8,
+                            color=[f_layers[i] for i in other_idx],
+                            colorscale="Viridis",
+                            opacity=0.7,
+                            colorbar=dict(title="Layer", x=1.02),
+                        ),
+                        text=[f"L{f_layers[i]} N{f_neurons[i]}<br>rank={f_ranks[i]}<br>act={f_acts[i]:.4g}<br>inf={f_infs[i]:.4g}"
+                              for i in other_idx],
+                        hoverinfo="text",
+                        name="neurons",
+                        customdata=[(f_layers[i], f_neurons[i]) for i in other_idx],
+                    ))
+
+                if sel_idx:
+                    fig.add_trace(go.Scatter(
+                        x=[f_acts[i] for i in sel_idx],
+                        y=[f_infs[i] for i in sel_idx],
+                        mode="markers",
+                        marker=dict(size=16, color="red", symbol="star", line=dict(width=2, color="black")),
+                        text=[f"SELECTED: L{f_layers[i]} N{f_neurons[i]}<br>rank={f_ranks[i]}" for i in sel_idx],
+                        hoverinfo="text",
+                        name="selected",
+                    ))
+
+                fig.update_layout(
+                    title=f"Activation vs Influence (top {top_n})",
+                    xaxis_title="Activation",
+                    yaxis_title="Influence",
+                    height=450,
+                )
+
+            elif chart_type == "rank_bars":
+                # Bar chart: x=rank, y=metric, color by layer
+                colors = ["red" if f_selected[i] else f"hsl({f_layers[i] * 360 / n_layers}, 70%, 50%)" for i in range(len(f_ranks))]
+                fig.add_trace(go.Bar(
+                    x=f_ranks,
+                    y=f_y,
+                    marker_color=colors,
+                    text=[f"L{f_layers[i]} N{f_neurons[i]}" for i in range(len(f_ranks))],
+                    hovertemplate="Rank %{x}<br>%{text}<br>" + y_metric + "=%{y:.4g}<extra></extra>",
+                    customdata=list(zip(f_layers, f_neurons)),
+                ))
+                fig.update_layout(
+                    title=f"Influence Ranking (top {top_n}) - color by layer",
+                    xaxis_title="Rank",
+                    yaxis_title=y_metric,
+                    height=450,
+                )
+
+            # Enable selection
+            fig.update_layout(clickmode="event+select", dragmode="lasso")
+            fig.update_traces(
+                selector=dict(type="scatter"),
+                unselected=dict(marker=dict(opacity=0.3)),
+            )
+
+            # Render chart with selection support
+            event = st.plotly_chart(
+                fig,
+                use_container_width=True,
+                key="infl_dist_chart",
+                on_select="rerun",
+                selection_mode=["points", "box", "lasso"],
+            )
+
+            # Handle selection to navigate (use pending nav to avoid widget state conflict)
+            if event and hasattr(event, "selection") and event.selection:
+                points = getattr(event.selection, "points", None) or []
+                if points:
+                    pt = points[0]
+                    customdata = getattr(pt, "customdata", None)
+                    if customdata is None and isinstance(pt, dict):
+                        customdata = pt.get("customdata")
+                    if customdata and len(customdata) >= 2:
+                        clicked_layer, clicked_neuron = int(customdata[0]), int(customdata[1])
+                        if (clicked_layer, clicked_neuron) != (layer, neuron):
+                            # Store pending navigation and rerun
+                            nav = {"layer": clicked_layer, "neuron": clicked_neuron}
+                            pairs = st.session_state.get("_candidate_pairs", [])
+                            for i, (l, n) in enumerate(pairs):
+                                if l == clicked_layer and n == clicked_neuron:
+                                    nav["candidate_idx"] = i
+                                    break
+                            st.session_state._pending_nav = nav
+                            st.rerun()
+
+            st.caption(
+                "Tip: Use lasso/box selection (Plotly toolbar) to select a neuron and navigate to it. "
+                "Selected neuron is shown as a red star. Color indicates layer."
+            )
+
+            # Fallback: quick jump selectbox
+            with st.expander("Quick jump (fallback)", expanded=False):
+                jump_labels = [
+                    f"#{f_ranks[i]}: L{f_layers[i]} N{f_neurons[i]} | {y_metric}={f_y[i]:.4g}"
+                    for i in range(len(f_ranks))
+                ]
+                jump_idx = st.selectbox(
+                    "Select neuron",
+                    options=list(range(len(jump_labels))),
+                    format_func=lambda i: jump_labels[i],
+                    key="chart_jump_sel",
+                )
+                if st.button("Go", key="chart_jump_btn"):
+                    target_layer = f_layers[int(jump_idx)]
+                    target_neuron = f_neurons[int(jump_idx)]
+                    nav = {"layer": target_layer, "neuron": target_neuron}
+                    pairs = st.session_state.get("_candidate_pairs", [])
+                    for i, (l, n) in enumerate(pairs):
+                        if l == target_layer and n == target_neuron:
+                            nav["candidate_idx"] = i
+                            break
+                    st.session_state._pending_nav = nav
+                    st.rerun()
 
     st.markdown("### Notes")
     st.write(

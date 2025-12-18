@@ -31,15 +31,28 @@ MINIMUM_THRESHOLD = 0.00005
 @dataclass(frozen=True)
 class HeatmapConfig:
     tokens_per_row: int = 50
-    show_values: bool = False
+    show_values: bool = True
     exclude_bos: bool = True
     value_decimals: int = 2
     minimum_threshold: float = MINIMUM_THRESHOLD
     minimum_opacity: float = MINIMUM_OPACITY
+    color_scale: str = "log"  # "log", "linear", "sqrt", "rank"
+
+
+# Valid color scale modes
+COLOR_SCALE_MODES = ["log", "linear", "sqrt", "power_0.3", "power_2"]
 
 
 def calculate_opacity(value_abs: float, max_abs: float, cfg: HeatmapConfig) -> float:
-    """Calculate opacity using Neuronpedia's logarithmic scaling."""
+    """Calculate opacity using configured scaling.
+    
+    Scaling modes:
+    - log: Neuronpedia-style logarithmic scaling (default)
+    - linear: Simple linear ratio
+    - sqrt: Square root - exaggerates low values, compresses highs
+    - power_0.3: Strong exaggeration of differences (gamma 0.3)
+    - power_2: Compresses low values, exaggerates highs (gamma 2)
+    """
     if max_abs <= 0.0 or value_abs <= cfg.minimum_threshold:
         return 0.0
 
@@ -50,7 +63,25 @@ def calculate_opacity(value_abs: float, max_abs: float, cfg: HeatmapConfig) -> f
         ratio = 1.0
 
     scale = 1.0 - cfg.minimum_opacity
-    opacity = cfg.minimum_opacity + (math.log10(1.0 + 9.0 * ratio) * scale) / math.log10(10.0)
+    
+    mode = cfg.color_scale
+    if mode == "linear":
+        # Simple linear scaling
+        scaled_ratio = ratio
+    elif mode == "sqrt":
+        # Square root: exaggerates small differences
+        scaled_ratio = math.sqrt(ratio)
+    elif mode == "power_0.3":
+        # Strong exaggeration (gamma = 0.3)
+        scaled_ratio = math.pow(ratio, 0.3)
+    elif mode == "power_2":
+        # Compress small values, exaggerate large (gamma = 2)
+        scaled_ratio = ratio * ratio
+    else:
+        # Default: Neuronpedia-style log scaling
+        scaled_ratio = math.log10(1.0 + 9.0 * ratio) / math.log10(10.0)
+    
+    opacity = cfg.minimum_opacity + scaled_ratio * scale
     return max(0.0, min(1.0, opacity))
 
 

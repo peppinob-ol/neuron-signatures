@@ -1,0 +1,261 @@
+{
+  "created_at_utc": "2025-12-17T08:48:39Z",
+  "model_name": "google/gemma-2-2b",
+  "dtype": "fp32",
+  "prompt": "The capital of the state containing Dallas is",
+  "source_prompt": "The capital of the state containing San Francisco is",
+  "control_source_prompt": "The capital of the state containing Miami is",
+  "target_token": " Sacramento",
+  "target_id": 43939,
+  "alt_token": " Austin",
+  "alt_id": 22605,
+  "pos_mode": "token",
+  "dest_positions": [
+    7
+  ],
+  "src_positions": [
+    7
+  ],
+  "layers": [
+    19
+  ],
+  "k_values": [
+    30
+  ],
+  "alpha_values": [
+    1.0
+  ],
+  "selection_mode": "pos",
+  "enable_permute_control": true,
+  "results": [
+    {
+      "success": true,
+      "layer": 19,
+      "n_positions": 1,
+      "total_neurons": 30,
+      "k_per_pos": 30,
+      "alpha": 1.0,
+      "selection_mode": "pos",
+      "pred_effect": 0.9532237648963928,
+      "baseline": {
+        "logit_target": 19.728450775146484,
+        "logit_alt": 25.875335693359375,
+        "logit_diff": -6.146884918212891,
+        "rank_target": 76,
+        "rank_alt": 0,
+        "margin_to_top1": 6.146884918212891,
+        "top1_token": " Austin",
+        "top1_logit": 25.875335693359375,
+        "target_prob": 0.000717461109161377,
+        "alt_prob": 0.33524057269096375,
+        "topk": [
+          {
+            "token": " Austin",
+            "logit": 25.875335693359375,
+            "prob": 0.33524057269096375,
+            "id": 22605
+          },
+          {
+            "token": " the",
+            "logit": 24.813154220581055,
+            "prob": 0.11589295417070389,
+            "id": 573
+          },
+          {
+            "token": " ",
+            "logit": 24.360836029052734,
+            "prob": 0.07372549921274185,
+            "id": 235248
+          },
+          {
+            "token": " Fort",
+            "logit": 23.788442611694336,
+            "prob": 0.04159397631883621,
+            "id": 9778
+          },
+          {
+            "token": " Texas",
+            "logit": 23.77323341369629,
+            "prob": 0.04096614941954613,
+            "id": 9447
+          },
+          {
+            "token": ":",
+            "logit": 23.608434677124023,
+            "prob": 0.03474193066358566,
+            "id": 235292
+          },
+          {
+            "token": " a",
+            "logit": 23.364646911621094,
+            "prob": 0.02722565270960331,
+            "id": 476
+          },
+          {
+            "token": " Dallas",
+            "logit": 23.31931495666504,
+            "prob": 0.026019014418125153,
+            "id": 26865
+          },
+          {
+            "token": " called",
+            "logit": 23.14113998413086,
+            "prob": 0.021772608160972595,
+            "id": 3151
+          },
+          {
+            "token": " located",
+            "logit": 22.873552322387695,
+            "prob": 0.0166609063744545,
+            "id": 7023
+          }
+        ]
+      },
+      "steered": {
+        "logit_target": 20.963254928588867,
+        "logit_alt": 26.081012725830078,
+        "logit_diff": -5.117757797241211,
+        "rank_target": 32,
+        "rank_alt": 0,
+        "margin_to_top1": 5.117757797241211,
+        "top1_token": " Austin",
+        "top1_logit": 26.081012725830078,
+        "target_prob": 0.00223548524081707,
+        "alt_prob": 0.3732379376888275,
+        "topk": [
+          {
+            "token": " Austin",
+            "logit": 26.081012725830078,
+            "prob": 0.3732379376888275,
+            "id": 22605
+          },
+          {
+            "token": " the",
+            "logit": 24.847944259643555,
+            "prob": 0.10876043885946274,
+            "id": 573
+          },
+          {
+            "token": " ",
+            "logit": 24.37655258178711,
+            "prob": 0.06788098812103271,
+            "id": 235248
+          },
+          {
+            "token": " Texas",
+            "logit": 23.76267433166504,
+            "prob": 0.03674042597413063,
+            "id": 9447
+          },
+          {
+            "token": " Fort",
+            "logit": 23.75505256652832,
+            "prob": 0.03646146506071091,
+            "id": 9778
+          },
+          {
+            "token": ":",
+            "logit": 23.650588989257812,
+            "prob": 0.03284476697444916,
+            "id": 235292
+          },
+          {
+            "token": " a",
+            "logit": 23.39059066772461,
+            "prob": 0.025325050577521324,
+            "id": 476
+          },
+          {
+            "token": " called",
+            "logit": 23.221389770507812,
+            "prob": 0.021382935345172882,
+            "id": 3151
+          },
+          {
+            "token": " Dallas",
+            "logit": 23.14470672607422,
+            "prob": 0.019804516807198524,
+            "id": 26865
+          },
+          {
+            "token": " Houston",
+            "logit": 22.985855102539062,
+            "prob": 0.016895689070224762,
+            "id": 22898
+          }
+        ]
+      },
+      "d_logit_diff": 1.0291271209716797,
+      "d_margin_to_top1": -1.0291271209716797,
+      "d_rank_target": -44,
+      "pred_vs_actual": 0.9262449171452983,
+      "plans": [
+        {
+          "dest_pos": 7,
+          "src_pos": 7,
+          "n_neurons": 30,
+          "pred_sum": 0.9532237648963928,
+          "top5_neurons": [
+            {
+              "idx": 270,
+              "delta": 0.5323607921600342,
+              "grad": 0.3977324962615967,
+              "term": 0.21173718571662903
+            },
+            {
+              "idx": 5403,
+              "delta": -0.9042996168136597,
+              "grad": -0.09641408920288086,
+              "term": 0.08718722313642502
+            },
+            {
+              "idx": 5097,
+              "delta": 4.173213481903076,
+              "grad": 0.01909169927239418,
+              "term": 0.07967373728752136
+            },
+            {
+              "idx": 5472,
+              "delta": 0.8282734155654907,
+              "grad": 0.0688176155090332,
+              "term": 0.056999802589416504
+            },
+            {
+              "idx": 3822,
+              "delta": -1.3910715579986572,
+              "grad": -0.035932257771492004,
+              "term": 0.049984343349933624
+            }
+          ]
+        }
+      ],
+      "control_structured": {
+        "d_logit_diff": 0.3360595703125,
+        "pred_effect": 0.24669687449932098,
+        "specificity_ratio": 3.0623354068289137
+      },
+      "control_permuted": {
+        "d_logit_diff_avg": -0.2664836883544922,
+        "d_logit_diff_samples": [
+          -0.5258216857910156,
+          -0.4785785675048828,
+          -0.15952110290527344,
+          0.0061283111572265625,
+          -0.17462539672851562
+        ],
+        "specificity_ratio": 3.8618766023782833
+      }
+    }
+  ],
+  "best_result": {
+    "layer": 19,
+    "k_per_pos": 30,
+    "alpha": 1.0,
+    "d_logit_diff": 1.0291271209716797,
+    "pred_vs_actual": 0.9262449171452983,
+    "d_rank_target": -44,
+    "d_margin_to_top1": -1.0291271209716797,
+    "struct_specificity": 3.0623354068289137,
+    "perm_specificity": 3.8618766023782833
+  }
+}

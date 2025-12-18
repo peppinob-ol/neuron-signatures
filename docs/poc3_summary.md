@@ -123,3 +123,6 @@ scp -r nodo207:/home/giuseppe/neuron-signatures/runs/poc3_1_gpu0 .\runs\
 4. If strong, try sweeping alpha: 0.5, 1.0, 2.0, 5.0
 5. Compare ablation screen results across layers (18-24)
 
+
+
+
