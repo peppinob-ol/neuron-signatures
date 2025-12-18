@@ -10,16 +10,17 @@ Design choices:
 1. Freeze parameter grads (only need activation grads)
 2. Capture all layers' hook_post activations with retain_grad()
 3. Selection modes: per_layer quota, global top-K, or greedy batches
-4. Strong controls: random, permute, negdelta, wrong-source
+4. Strong controls: random, permute, permute_cross, negdelta, wrongpos, wrongsrc
+5. Dual metrics: track both target-alt AND target-objective_alt when objective differs
 
 Run example:
-    python -m neuron_signatures.poc3_5_global_pos1 \
-      --prompt "The capital of the state containing Dallas is" \
-      --source_prompt "The capital of the state containing San Francisco is" \
-      --target_token " Sacramento" --alt_token " Austin" \
-      --layer_window 0:25 --alpha 1.0 \
-      --select_mode greedy --k_steps "1,2,5,10,20,50,100,200" \
-      --controls "random,permute,negdelta" \
+    python -m neuron_signatures.poc3_5_global_pos1 \\
+      --prompt "The capital of the state containing Dallas is" \\
+      --source_prompt "The capital of the state containing San Francisco is" \\
+      --target_token " Sacramento" --alt_token " Austin" \\
+      --layer_window 0:25 --alpha 1.0 \\
+      --select_mode greedy --k_steps "1,2,5,10,20,50,100,200" \\
+      --controls "random,permute,negdelta,wrongpos" \\
       --out_dir runs/poc3_5_global_test
 """
 
@@ -27,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import random
 from dataclasses import dataclass, field
@@ -35,7 +37,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import torch
-from tqdm import tqdm
 
 from neuron_signatures.neuron_influence import (
     DTYPE_MAP,
@@ -93,6 +94,19 @@ class SteeringPlan:
             result[c.layer].append(c)
         return result
 
+    def with_new_pos(self, new_pos: int) -> "SteeringPlan":
+        """Create a copy with a different position (for wrongpos control)."""
+        new_plan = SteeringPlan(pos=new_pos)
+        for c in self.candidates:
+            new_plan.add(NeuronCandidate(
+                layer=c.layer,
+                neuron_idx=c.neuron_idx,
+                delta=c.delta,
+                grad=c.grad,
+                pred=c.pred,
+            ))
+        return new_plan
+
 
 @dataclass
 class LogitMetrics:
@@ -108,6 +122,17 @@ class LogitMetrics:
     prob_target: float
     prob_alt: float
     topk: List[Dict[str, Any]]
+
+
+@dataclass
+class DualMetrics:
+    """Dual metrics: target-alt AND target-objective_alt."""
+    # Primary: target vs alt (for final evaluation)
+    target_alt: LogitMetrics
+    # Objective: what we optimized for (may differ in target_top1 mode)
+    target_obj: LogitMetrics
+    # Are they the same?
+    same_objective: bool
 
 
 # -----------------------------------------------------------------------------
@@ -163,6 +188,30 @@ def compute_logit_metrics(
     )
 
 
+def compute_dual_metrics(
+    tokenizer,
+    logits_1d: torch.Tensor,
+    target_id: int,
+    alt_id: int,
+    objective_alt_id: int,
+    topk_n: int = 10,
+) -> DualMetrics:
+    """Compute dual metrics: both target-alt and target-objective_alt."""
+    target_alt = compute_logit_metrics(tokenizer, logits_1d, target_id, alt_id, topk_n)
+
+    same_objective = (alt_id == objective_alt_id)
+    if same_objective:
+        target_obj = target_alt
+    else:
+        target_obj = compute_logit_metrics(tokenizer, logits_1d, target_id, objective_alt_id, topk_n)
+
+    return DualMetrics(
+        target_alt=target_alt,
+        target_obj=target_obj,
+        same_objective=same_objective,
+    )
+
+
 def metrics_to_dict(m: LogitMetrics) -> Dict[str, Any]:
     return {
         "logit_target": m.logit_target,
@@ -179,9 +228,28 @@ def metrics_to_dict(m: LogitMetrics) -> Dict[str, Any]:
     }
 
 
+def dual_metrics_to_dict(dm: DualMetrics) -> Dict[str, Any]:
+    return {
+        "target_alt": metrics_to_dict(dm.target_alt),
+        "target_obj": metrics_to_dict(dm.target_obj),
+        "same_objective": dm.same_objective,
+    }
+
+
 # -----------------------------------------------------------------------------
 # Activation capture with gradients (all layers, pos=-1)
 # -----------------------------------------------------------------------------
+
+def get_baseline_top1_id(
+    model,
+    tokens: torch.Tensor,
+) -> int:
+    """Get the top-1 predicted token id for baseline (no intervention)."""
+    with torch.inference_mode():
+        logits = model(tokens, return_type="logits")
+    top1_id = int(logits[0, -1].argmax().item())
+    return top1_id
+
 
 def capture_acts_and_grads_dest(
     model,
@@ -195,8 +263,8 @@ def capture_acts_and_grads_dest(
     Forward dest prompt with gradients, capture activations at all layers.
 
     Returns:
-        acts: {layer: [d_mlp] tensor} - activations at pos
-        grads: {layer: [d_mlp] tensor} - gradients at pos
+        acts: {layer: [d_mlp] tensor} - activations at pos (CPU, float32)
+        grads: {layer: [d_mlp] tensor} - gradients at pos (CPU, float32)
         baseline_diff: logit_target - logit_alt
     """
     captured: Dict[int, torch.Tensor] = {}
@@ -225,7 +293,7 @@ def capture_acts_and_grads_dest(
 
     model.reset_hooks(including_permanent=True)
 
-    # Extract activations and grads at the target position
+    # Extract activations and grads at the target position, move to CPU
     acts = {}
     grads = {}
     for L in layers:
@@ -239,6 +307,13 @@ def capture_acts_and_grads_dest(
         grads[L] = grad_full[0, pos].detach().float().cpu()
 
     baseline_diff = float(diff.detach().item())
+
+    # Memory cleanup: release captured tensors
+    del captured
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
     return acts, grads, baseline_diff
 
 
@@ -252,7 +327,7 @@ def capture_acts_src(
     Forward source prompt (no grad), capture activations at all layers.
 
     Returns:
-        acts: {layer: [d_mlp] tensor} - activations at pos
+        acts: {layer: [d_mlp] tensor} - activations at pos (CPU, float32)
     """
     captured: Dict[int, torch.Tensor] = {}
 
@@ -280,6 +355,10 @@ def capture_acts_src(
         if L not in captured:
             raise RuntimeError(f"Layer {L} activation not captured (src)")
         acts[L] = captured[L][0, pos].float().cpu()
+
+    # Memory cleanup
+    del captured
+    gc.collect()
 
     return acts
 
@@ -358,7 +437,7 @@ def select_global_topk(
 
 
 # -----------------------------------------------------------------------------
-# Intervention hooks (multi-layer, pos=-1)
+# Intervention hooks (multi-layer, pos=-1) - with device caching
 # -----------------------------------------------------------------------------
 
 def make_multi_layer_hook(
@@ -367,9 +446,10 @@ def make_multi_layer_hook(
     alpha: float,
 ):
     """
-    Create a hook function for a specific layer.
+    Create a hook function factory for multi-layer intervention.
 
     Returns a factory that takes a layer and returns a hook for that layer.
+    Uses lazy caching to avoid recreating tensors on every forward pass.
     """
     def make_hook_for_layer(layer: int):
         if layer not in plan_by_layer:
@@ -379,10 +459,20 @@ def make_multi_layer_hook(
         idxs = torch.tensor([c.neuron_idx for c in layer_candidates], dtype=torch.long)
         deltas = torch.tensor([c.delta for c in layer_candidates], dtype=torch.float32)
 
+        # Cached device tensors (lazy init)
+        cache: Dict[str, Optional[torch.Tensor]] = {"idxs_dev": None, "deltas_dev": None}
+
         def hook_fn(act: torch.Tensor, hook) -> torch.Tensor:
-            # Patch in-place at selected indices
-            d = (alpha * deltas).to(device=act.device, dtype=act.dtype)
-            act[:, pos, idxs.to(act.device)] = act[:, pos, idxs.to(act.device)] + d
+            # Lazy caching: move to device only once (with explicit None guards)
+            if (cache["idxs_dev"] is None or
+                cache["deltas_dev"] is None or
+                cache["idxs_dev"].device != act.device or
+                cache["deltas_dev"].dtype != act.dtype):
+                cache["idxs_dev"] = idxs.to(act.device)
+                cache["deltas_dev"] = (alpha * deltas).to(device=act.device, dtype=act.dtype)
+
+            # In-place addition at selected indices (torch-friendly)
+            act[:, pos, cache["idxs_dev"]] += cache["deltas_dev"]
             return act
 
         return hook_fn
@@ -395,9 +485,15 @@ def run_with_plan(
     tokens: torch.Tensor,
     plan: SteeringPlan,
     alpha: float,
+    plan_by_layer: Optional[Dict[int, List[NeuronCandidate]]] = None,
 ) -> torch.Tensor:
-    """Run forward with multi-layer patching, return next-token logits."""
-    plan_by_layer = plan.by_layer()
+    """Run forward with multi-layer patching, return next-token logits.
+    
+    Args:
+        plan_by_layer: Pre-computed by_layer dict for performance (optional).
+    """
+    if plan_by_layer is None:
+        plan_by_layer = plan.by_layer()
     hook_factory = make_multi_layer_hook(plan_by_layer, plan.pos, alpha)
 
     fwd_hooks = []
@@ -420,36 +516,41 @@ def run_with_plan(
 
 
 # -----------------------------------------------------------------------------
-# Control interventions
+# Control interventions (improved)
 # -----------------------------------------------------------------------------
 
-def make_random_plan(
-    n_neurons: int,
+def make_random_plan_like(
+    original_plan: SteeringPlan,
     layers: List[int],
     d_mlp: int,
-    pos: int,
-    delta_magnitude: float,
 ) -> SteeringPlan:
-    """Random neurons with random deltas of given magnitude."""
-    plan = SteeringPlan(pos=pos)
-    for _ in range(n_neurons):
+    """
+    Random neurons with SAME deltas as original (preserves delta budget).
+
+    This is "random mapping, same delta budget" - a stronger control than
+    random magnitude.
+    """
+    plan = SteeringPlan(pos=original_plan.pos)
+    deltas = [c.delta for c in original_plan.candidates]
+    random.shuffle(deltas)
+
+    for d in deltas:
         L = random.choice(layers)
         i = random.randint(0, d_mlp - 1)
-        # Random sign
-        d = delta_magnitude * (1.0 if random.random() > 0.5 else -1.0)
         plan.add(NeuronCandidate(layer=L, neuron_idx=i, delta=d, grad=0.0, pred=0.0))
+
     return plan
 
 
-def make_permuted_plan(
+def make_permuted_plan_within_layer(
     original_plan: SteeringPlan,
 ) -> SteeringPlan:
-    """Permute deltas across neurons within each layer."""
+    """Permute deltas across neurons WITHIN each layer (preserves layer structure)."""
     plan_by_layer = original_plan.by_layer()
     new_plan = SteeringPlan(pos=original_plan.pos)
 
     for L, cands in plan_by_layer.items():
-        # Extract deltas and shuffle
+        # Extract deltas and shuffle within layer
         deltas = [c.delta for c in cands]
         random.shuffle(deltas)
         # Create new candidates with shuffled deltas
@@ -461,6 +562,29 @@ def make_permuted_plan(
                 grad=c.grad,
                 pred=0.0,  # Not meaningful after permutation
             ))
+
+    return new_plan
+
+
+def make_permuted_plan_cross_layer(
+    original_plan: SteeringPlan,
+) -> SteeringPlan:
+    """Permute deltas ACROSS layers (strongest permutation control)."""
+    new_plan = SteeringPlan(pos=original_plan.pos)
+
+    # Extract all deltas and shuffle globally
+    all_deltas = [c.delta for c in original_plan.candidates]
+    random.shuffle(all_deltas)
+
+    # Assign shuffled deltas to original (layer, neuron) positions
+    for c, new_delta in zip(original_plan.candidates, all_deltas):
+        new_plan.add(NeuronCandidate(
+            layer=c.layer,
+            neuron_idx=c.neuron_idx,
+            delta=new_delta,
+            grad=c.grad,
+            pred=0.0,
+        ))
 
     return new_plan
 
@@ -482,7 +606,7 @@ def make_negdelta_plan(
 
 
 # -----------------------------------------------------------------------------
-# Greedy batched selection
+# Greedy batched selection (with dual metrics)
 # -----------------------------------------------------------------------------
 
 def run_greedy_batches(
@@ -494,15 +618,17 @@ def run_greedy_batches(
     k_steps: List[int],
     target_id: int,
     alt_id: int,
-    baseline: LogitMetrics,
+    objective_alt_id: int,
+    baseline_dual: DualMetrics,
     topk_n: int = 10,
 ) -> List[Dict[str, Any]]:
     """
     Run greedy batched intervention: try K=1,2,5,10,... neurons.
 
-    Returns list of results per K step.
+    Returns list of results per K step with dual metrics.
     """
     results = []
+    eps = 1e-6
 
     for k in k_steps:
         if k > len(candidates):
@@ -515,13 +641,25 @@ def run_greedy_batches(
         for c in candidates[:k]:
             plan.add(c)
 
-        # Run intervention
-        steered_logits = run_with_plan(model, tokens, plan, alpha)
-        steered = compute_logit_metrics(model.tokenizer, steered_logits, target_id, alt_id, topk_n)
+        # Pre-compute plan_by_layer for performance
+        plan_by_layer = plan.by_layer()
 
-        d_logit_diff = steered.logit_diff - baseline.logit_diff
-        d_target_logit = steered.logit_target - baseline.logit_target
-        d_alt_logit = steered.logit_alt - baseline.logit_alt
+        # Run intervention
+        steered_logits = run_with_plan(model, tokens, plan, alpha, plan_by_layer)
+        steered_dual = compute_dual_metrics(model.tokenizer, steered_logits, target_id, alt_id, objective_alt_id, topk_n)
+
+        # Compute deltas for BOTH metrics
+        d_logit_diff_alt = steered_dual.target_alt.logit_diff - baseline_dual.target_alt.logit_diff
+        d_target_logit = steered_dual.target_alt.logit_target - baseline_dual.target_alt.logit_target
+        d_alt_logit = steered_dual.target_alt.logit_alt - baseline_dual.target_alt.logit_alt
+
+        d_logit_diff_obj = steered_dual.target_obj.logit_diff - baseline_dual.target_obj.logit_diff
+
+        pred_sum = plan.total_pred * alpha
+
+        # Robust pred/actual metrics (on objective)
+        pred_vs_actual = pred_sum / d_logit_diff_obj if abs(d_logit_diff_obj) > eps else float('nan')
+        pred_minus_actual = pred_sum - d_logit_diff_obj
 
         # Count layers involved
         layers_involved = list(set(c.layer for c in candidates[:k]))
@@ -530,16 +668,183 @@ def run_greedy_batches(
             "k": k,
             "n_layers": len(layers_involved),
             "layers": sorted(layers_involved),
-            "pred_sum": plan.total_pred * alpha,
-            "d_logit_diff": d_logit_diff,
+            "pred_sum": pred_sum,
+            # Primary (target vs alt)
+            "d_logit_diff": d_logit_diff_alt,
             "d_target_logit": d_target_logit,
             "d_alt_logit": d_alt_logit,
-            "pred_vs_actual": (plan.total_pred * alpha) / d_logit_diff if abs(d_logit_diff) > 1e-6 else float('nan'),
-            "steered": metrics_to_dict(steered),
-            "success": steered.rank_target <= steered.rank_alt,  # Target outranks alt
+            # Objective (what we optimized)
+            "d_logit_diff_obj": d_logit_diff_obj,
+            "pred_vs_actual": pred_vs_actual,
+            "pred_minus_actual": pred_minus_actual,
+            # Full steered metrics
+            "steered": dual_metrics_to_dict(steered_dual),
+            # Success: target outranks alt in primary metric
+            "success": steered_dual.target_alt.rank_target <= steered_dual.target_alt.rank_alt,
         })
 
     return results
+
+
+# -----------------------------------------------------------------------------
+# Plotting (paper-grade figures)
+# -----------------------------------------------------------------------------
+
+def generate_plots(
+    out_dir: Path,
+    main_results: List[Dict[str, Any]],
+    control_results: Dict[str, Any],
+    baseline_logit_diff: float,
+    main_effect: float,
+    best_idx: int,
+):
+    """Generate standard paper-grade plots."""
+    try:
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend
+        import matplotlib.pyplot as plt
+    except ImportError:
+        safe_print("WARNING: matplotlib not available, skipping plot generation")
+        return
+
+    plots_dir = out_dir / "plots"
+    plots_dir.mkdir(exist_ok=True)
+
+    # -------------------------------------------------------------------------
+    # Plot 1: d_logit_diff vs K (with pred_sum overlay)
+    # -------------------------------------------------------------------------
+    if main_results and len(main_results) > 1:
+        ks = [r["k"] for r in main_results]
+        d_diffs = [r["d_logit_diff"] for r in main_results]
+        pred_sums = [r["pred_sum"] for r in main_results]
+
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+
+        color1 = '#2E86AB'
+        ax1.set_xlabel('K (number of neurons)', fontsize=12)
+        ax1.set_ylabel('d_logit_diff (actual)', color=color1, fontsize=12)
+        ax1.plot(ks, d_diffs, 'o-', color=color1, linewidth=2, markersize=6, label='Actual')
+        ax1.tick_params(axis='y', labelcolor=color1)
+        ax1.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+
+        # Zero-crossing threshold: delta needed to make logit_diff = 0
+        zero_crossing = -baseline_logit_diff
+        ax1.axhline(y=zero_crossing, color='red', linestyle=':', alpha=0.7, 
+                   label=f'Zero-crossing ({zero_crossing:+.2f})')
+
+        ax2 = ax1.twinx()
+        color2 = '#A23B72'
+        ax2.set_ylabel('pred_sum (predicted)', color=color2, fontsize=12)
+        ax2.plot(ks, pred_sums, 's--', color=color2, linewidth=2, markersize=5, label='Predicted')
+        ax2.tick_params(axis='y', labelcolor=color2)
+
+        # Mark best_idx point (the one used for controls comparison)
+        best_k = main_results[best_idx]["k"]
+        ax1.axvline(x=best_k, color='green', linestyle='-', alpha=0.3, linewidth=8, 
+                   label=f'Best K={best_k}')
+
+        fig.suptitle('Steering Effect vs Number of Neurons', fontsize=14)
+        ax1.set_xscale('log')
+        ax1.grid(True, alpha=0.3)
+        ax1.legend(loc='upper left')
+        ax2.legend(loc='upper right')
+
+        fig.tight_layout()
+        fig.savefig(plots_dir / "greedy_curve.png", dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        safe_print(f"  Saved: {plots_dir / 'greedy_curve.png'}")
+
+    # -------------------------------------------------------------------------
+    # Plot 2: Control comparison (boxplot/bar)
+    # -------------------------------------------------------------------------
+    control_names = []
+    control_means = []
+    control_stds = []
+    # Use main_effect passed from caller (consistent with best_idx)
+
+    for name, data in control_results.items():
+        if "d_logit_diff_mean" in data:
+            control_names.append(name)
+            control_means.append(data["d_logit_diff_mean"])
+            control_stds.append(data.get("d_logit_diff_std", 0.0))
+        elif "d_logit_diff" in data and name != "negdelta":
+            control_names.append(name)
+            control_means.append(data["d_logit_diff"])
+            control_stds.append(0.0)
+
+    if control_names:
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        x = range(len(control_names) + 1)
+        all_names = ["MAIN"] + control_names
+        all_means = [main_effect] + control_means
+        all_stds = [0.0] + control_stds
+
+        colors = ['#2E86AB'] + ['#A23B72'] * len(control_names)
+        bars = ax.bar(x, all_means, yerr=all_stds, capsize=5, color=colors, alpha=0.8)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(all_names, rotation=45, ha='right')
+        ax.set_ylabel('d_logit_diff', fontsize=12)
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        ax.set_title('Main Effect vs Controls', fontsize=14)
+        ax.grid(True, axis='y', alpha=0.3)
+
+        # Add specificity annotations
+        for i, name in enumerate(control_names):
+            if "specificity" in control_results[name]:
+                spec = control_results[name]["specificity"]
+                ax.annotate(f'{spec:.1f}x', xy=(i+1, all_means[i+1]),
+                           xytext=(0, 10), textcoords='offset points',
+                           ha='center', fontsize=9, color='#666')
+
+        fig.tight_layout()
+        fig.savefig(plots_dir / "controls_comparison.png", dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        safe_print(f"  Saved: {plots_dir / 'controls_comparison.png'}")
+
+    # -------------------------------------------------------------------------
+    # Plot 3: Control samples distribution (if available)
+    # -------------------------------------------------------------------------
+    sample_data = {}
+    for name, data in control_results.items():
+        if "samples" in data:
+            sample_data[name] = data["samples"]
+
+    if sample_data and main_results:
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        positions = []
+        labels = []
+        all_samples = []
+
+        pos = 1
+        for name, samples in sample_data.items():
+            positions.append(pos)
+            labels.append(name)
+            all_samples.append(samples)
+            pos += 1
+
+        bp = ax.boxplot(all_samples, positions=positions, widths=0.6, patch_artist=True)
+        for patch in bp['boxes']:
+            patch.set_facecolor('#A23B72')
+            patch.set_alpha(0.6)
+
+        # Add main effect line
+        ax.axhline(y=main_effect, color='#2E86AB', linewidth=2, label=f'Main effect: {main_effect:.3f}')
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+
+        ax.set_xticks(positions)
+        ax.set_xticklabels(labels)
+        ax.set_ylabel('d_logit_diff', fontsize=12)
+        ax.set_title('Control Distributions vs Main Effect', fontsize=14)
+        ax.legend()
+        ax.grid(True, axis='y', alpha=0.3)
+
+        fig.tight_layout()
+        fig.savefig(plots_dir / "controls_distribution.png", dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        safe_print(f"  Saved: {plots_dir / 'controls_distribution.png'}")
 
 
 # -----------------------------------------------------------------------------
@@ -564,6 +869,11 @@ def main():
     ap.add_argument("--target_token", required=True, help="Token to promote (e.g., ' Sacramento')")
     ap.add_argument("--alt_token", required=True, help="Token to compare against (e.g., ' Austin')")
 
+    # Objective mode
+    ap.add_argument("--objective", default="target_alt", choices=["target_alt", "target_top1"],
+                    help="Objective: target_alt = logit(target)-logit(alt); "
+                         "target_top1 = logit(target)-logit(baseline_top1)")
+
     # Position (fixed to -1 for this POC)
     ap.add_argument("--pos_mode", default="last", choices=["last"])
     ap.add_argument("--pos", type=int, default=-1)
@@ -579,20 +889,19 @@ def main():
     ap.add_argument("--k_per_layer", type=int, default=10, help="For per_layer mode")
     ap.add_argument("--k_global", type=int, default=200, help="For global mode")
     ap.add_argument("--k_steps", default="1,2,5,10,20,50,100,200", help="For greedy mode, comma-separated K values")
-    ap.add_argument("--positive_only", action="store_true", default=True,
-                    help="Only select neurons with positive pred (default: True)")
     ap.add_argument("--include_negative", action="store_true",
-                    help="Include neurons with negative pred in ranking")
+                    help="Include neurons with pred <= 0 in ranking (default: positive only)")
 
     # Controls
-    ap.add_argument("--controls", default="random,permute,negdelta",
-                    help="Comma-separated controls: random, permute, negdelta, wrongsrc")
+    ap.add_argument("--controls", default="random,permute,negdelta,wrongpos",
+                    help="Comma-separated controls: random, permute, permute_cross, negdelta, wrongpos, wrongsrc")
     ap.add_argument("--control_trials", type=int, default=5, help="Number of trials for stochastic controls")
 
     # Output
     ap.add_argument("--topk_tokens", type=int, default=10)
     ap.add_argument("--out_dir", default=None)
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--no_plots", action="store_true", help="Skip plot generation")
 
     args = ap.parse_args()
 
@@ -616,7 +925,7 @@ def main():
 
     dtype = DTYPE_MAP[args.dtype]
     prepend_bos = not args.no_prepend_bos
-    positive_only = args.positive_only and not args.include_negative
+    positive_only = not args.include_negative
 
     safe_print("=" * 70)
     safe_print("POC 3.5: Global Cross-Layer Steering at pos=-1")
@@ -626,6 +935,7 @@ def main():
     safe_print(f"Dest: {args.prompt}")
     safe_print(f"Src:  {args.source_prompt}")
     safe_print(f"Target: {args.target_token!r} | Alt: {args.alt_token!r}")
+    safe_print(f"Objective: {args.objective}")
     safe_print(f"Selection: {args.select_mode} | alpha: {args.alpha}")
     safe_print(f"Controls: {controls}")
     safe_print("")
@@ -633,6 +943,7 @@ def main():
     # Load model
     safe_print("Loading model...")
     model = load_model(args.model_name, args.device, dtype)
+    model.eval()  # Ensure eval mode
     d_mlp = model.cfg.d_mlp
 
     # IMPORTANT: Freeze parameters to avoid allocating .grad buffers for weights
@@ -653,11 +964,12 @@ def main():
 
     dest_seq_len = dest_tokens.shape[1]
     src_seq_len = src_tokens.shape[1]
-    pos_dest = normalize_pos(args.pos, dest_seq_len)
+    pos_arg = args.pos  # Original arg value (e.g., -1)
+    pos_dest = normalize_pos(args.pos, dest_seq_len)  # Normalized (e.g., 8)
     pos_src = normalize_pos(args.pos, src_seq_len)
 
-    safe_print(f"Dest seq_len: {dest_seq_len}, pos: {pos_dest}")
-    safe_print(f"Src seq_len: {src_seq_len}, pos: {pos_src}")
+    safe_print(f"Dest seq_len: {dest_seq_len}, pos_arg: {pos_arg}, pos_normalized: {pos_dest}")
+    safe_print(f"Src seq_len: {src_seq_len}, pos_arg: {pos_arg}, pos_normalized: {pos_src}")
 
     # Show token at pos
     dest_tok_at_pos = model.tokenizer.decode([dest_tokens[0, pos_dest].item()])
@@ -667,14 +979,32 @@ def main():
     safe_print("")
 
     # =========================================================================
+    # Step 0: Determine objective token (for target_top1 mode)
+    # =========================================================================
+    objective_alt_id = alt_id
+    objective_alt_token = args.alt_token
+
+    if args.objective == "target_top1":
+        safe_print("Step 0: Getting baseline top-1 for target_top1 objective...")
+        baseline_top1_id = get_baseline_top1_id(model, dest_tokens)
+        baseline_top1_token = sanitize_token(model.tokenizer.decode([baseline_top1_id]))
+        safe_print(f"  Baseline top-1: {baseline_top1_token!r} (id={baseline_top1_id})")
+
+        # Use baseline top-1 as the "alt" for gradient computation
+        objective_alt_id = baseline_top1_id
+        objective_alt_token = baseline_top1_token
+        safe_print(f"  Objective: logit({args.target_token!r}) - logit({baseline_top1_token!r})")
+        safe_print("")
+
+    # =========================================================================
     # Step 1: Capture activations and gradients
     # =========================================================================
     safe_print("Step 1: Capturing activations and gradients (dest with grad, src no grad)...")
 
-    acts_dest, grads, baseline_diff = capture_acts_and_grads_dest(
-        model, dest_tokens, layers, pos_dest, target_id, alt_id
+    acts_dest, grads, baseline_diff_obj = capture_acts_and_grads_dest(
+        model, dest_tokens, layers, pos_dest, target_id, objective_alt_id
     )
-    safe_print(f"  Baseline logit_diff (target-alt): {baseline_diff:+.4f}")
+    safe_print(f"  Baseline logit_diff (target-objective_alt): {baseline_diff_obj:+.4f}")
 
     acts_src = capture_acts_src(model, src_tokens, layers, pos_src)
     safe_print(f"  Captured activations for {len(layers)} layers")
@@ -709,19 +1039,21 @@ def main():
         safe_print(f"    L{L:2d}: {layer_counts[L]:5d} candidates, pred_mass={layer_pred_mass[L]:+.4f}")
 
     # =========================================================================
-    # Step 3: Baseline metrics
+    # Step 3: Baseline metrics (dual: both target-alt AND target-objective_alt)
     # =========================================================================
-    safe_print("\nStep 3: Computing baseline metrics...")
+    safe_print("\nStep 3: Computing baseline metrics (dual)...")
 
     with torch.inference_mode():
         base_logits = model(dest_tokens, return_type="logits")[0, -1]
-    baseline = compute_logit_metrics(model.tokenizer, base_logits, target_id, alt_id, args.topk_tokens)
+    baseline_dual = compute_dual_metrics(model.tokenizer, base_logits, target_id, alt_id, objective_alt_id, args.topk_tokens)
 
-    safe_print(f"  Baseline:")
-    safe_print(f"    logit_target={baseline.logit_target:+.4f}, logit_alt={baseline.logit_alt:+.4f}")
-    safe_print(f"    logit_diff={baseline.logit_diff:+.4f}")
-    safe_print(f"    rank_target={baseline.rank_target}, rank_alt={baseline.rank_alt}")
-    safe_print(f"    top1: {baseline.top1_token!r} (logit={baseline.logit_top1:.4f})")
+    safe_print(f"  Baseline (target vs alt):")
+    safe_print(f"    logit_diff={baseline_dual.target_alt.logit_diff:+.4f}")
+    safe_print(f"    rank_target={baseline_dual.target_alt.rank_target}, rank_alt={baseline_dual.target_alt.rank_alt}")
+    safe_print(f"    top1: {baseline_dual.target_alt.top1_token!r}")
+    if not baseline_dual.same_objective:
+        safe_print(f"  Baseline (target vs objective_alt):")
+        safe_print(f"    logit_diff={baseline_dual.target_obj.logit_diff:+.4f}")
 
     # =========================================================================
     # Step 4: Selection and intervention
@@ -729,99 +1061,128 @@ def main():
     safe_print(f"\nStep 4: Running {args.select_mode} selection + intervention...")
 
     main_results = []
+    selected_for_controls: List[NeuronCandidate] = []  # Track actual selection for controls
 
     if args.select_mode == "per_layer":
         selected = select_per_layer(candidates, args.k_per_layer)
+        selected_for_controls = selected
         safe_print(f"  Selected {len(selected)} neurons ({args.k_per_layer} per layer)")
 
         plan = SteeringPlan(pos=pos_dest)
         for c in selected:
             plan.add(c)
 
-        steered_logits = run_with_plan(model, dest_tokens, plan, args.alpha)
-        steered = compute_logit_metrics(model.tokenizer, steered_logits, target_id, alt_id, args.topk_tokens)
+        plan_by_layer = plan.by_layer()
+        steered_logits = run_with_plan(model, dest_tokens, plan, args.alpha, plan_by_layer)
+        steered_dual = compute_dual_metrics(model.tokenizer, steered_logits, target_id, alt_id, objective_alt_id, args.topk_tokens)
 
-        d_logit_diff = steered.logit_diff - baseline.logit_diff
+        d_logit_diff_alt = steered_dual.target_alt.logit_diff - baseline_dual.target_alt.logit_diff
+        d_logit_diff_obj = steered_dual.target_obj.logit_diff - baseline_dual.target_obj.logit_diff
+        d_target_logit = steered_dual.target_alt.logit_target - baseline_dual.target_alt.logit_target
+        d_alt_logit = steered_dual.target_alt.logit_alt - baseline_dual.target_alt.logit_alt
+        pred_sum = plan.total_pred * args.alpha
+        eps = 1e-6
+
         main_results.append({
             "mode": "per_layer",
             "k": len(selected),
             "k_per_layer": args.k_per_layer,
-            "pred_sum": plan.total_pred * args.alpha,
-            "d_logit_diff": d_logit_diff,
-            "pred_vs_actual": (plan.total_pred * args.alpha) / d_logit_diff if abs(d_logit_diff) > 1e-6 else float('nan'),
-            "steered": metrics_to_dict(steered),
+            "pred_sum": pred_sum,
+            "d_logit_diff": d_logit_diff_alt,
+            "d_logit_diff_obj": d_logit_diff_obj,
+            "d_target_logit": d_target_logit,
+            "d_alt_logit": d_alt_logit,
+            "pred_vs_actual": pred_sum / d_logit_diff_obj if abs(d_logit_diff_obj) > eps else float('nan'),
+            "pred_minus_actual": pred_sum - d_logit_diff_obj,
+            "steered": dual_metrics_to_dict(steered_dual),
+            "success": steered_dual.target_alt.rank_target <= steered_dual.target_alt.rank_alt,
         })
 
     elif args.select_mode == "global":
         selected = select_global_topk(candidates, args.k_global)
+        selected_for_controls = selected
         safe_print(f"  Selected {len(selected)} neurons (global top-{args.k_global})")
 
         plan = SteeringPlan(pos=pos_dest)
         for c in selected:
             plan.add(c)
 
-        steered_logits = run_with_plan(model, dest_tokens, plan, args.alpha)
-        steered = compute_logit_metrics(model.tokenizer, steered_logits, target_id, alt_id, args.topk_tokens)
+        plan_by_layer = plan.by_layer()
+        steered_logits = run_with_plan(model, dest_tokens, plan, args.alpha, plan_by_layer)
+        steered_dual = compute_dual_metrics(model.tokenizer, steered_logits, target_id, alt_id, objective_alt_id, args.topk_tokens)
 
-        d_logit_diff = steered.logit_diff - baseline.logit_diff
+        d_logit_diff_alt = steered_dual.target_alt.logit_diff - baseline_dual.target_alt.logit_diff
+        d_logit_diff_obj = steered_dual.target_obj.logit_diff - baseline_dual.target_obj.logit_diff
+        d_target_logit = steered_dual.target_alt.logit_target - baseline_dual.target_alt.logit_target
+        d_alt_logit = steered_dual.target_alt.logit_alt - baseline_dual.target_alt.logit_alt
+        pred_sum = plan.total_pred * args.alpha
+        eps = 1e-6
+
         main_results.append({
             "mode": "global",
             "k": len(selected),
-            "pred_sum": plan.total_pred * args.alpha,
-            "d_logit_diff": d_logit_diff,
-            "pred_vs_actual": (plan.total_pred * args.alpha) / d_logit_diff if abs(d_logit_diff) > 1e-6 else float('nan'),
-            "steered": metrics_to_dict(steered),
+            "pred_sum": pred_sum,
+            "d_logit_diff": d_logit_diff_alt,
+            "d_logit_diff_obj": d_logit_diff_obj,
+            "d_target_logit": d_target_logit,
+            "d_alt_logit": d_alt_logit,
+            "pred_vs_actual": pred_sum / d_logit_diff_obj if abs(d_logit_diff_obj) > eps else float('nan'),
+            "pred_minus_actual": pred_sum - d_logit_diff_obj,
+            "steered": dual_metrics_to_dict(steered_dual),
+            "success": steered_dual.target_alt.rank_target <= steered_dual.target_alt.rank_alt,
         })
 
     elif args.select_mode == "greedy":
         safe_print(f"  Running greedy batches: K = {k_steps}")
         main_results = run_greedy_batches(
             model, dest_tokens, candidates, pos_dest, args.alpha,
-            k_steps, target_id, alt_id, baseline, args.topk_tokens
+            k_steps, target_id, alt_id, objective_alt_id, baseline_dual, args.topk_tokens
         )
 
         safe_print("\n  Greedy results:")
         for r in main_results:
             status = "SUCCESS" if r["success"] else ""
-            safe_print(f"    K={r['k']:4d}: d_diff={r['d_logit_diff']:+.4f}, pred={r['pred_sum']:+.4f}, "
+            obj_note = f" (obj={r['d_logit_diff_obj']:+.4f})" if not baseline_dual.same_objective else ""
+            safe_print(f"    K={r['k']:4d}: d_diff={r['d_logit_diff']:+.4f}{obj_note}, pred={r['pred_sum']:+.4f}, "
                       f"p/a={r['pred_vs_actual']:.2f}, layers={r['n_layers']} {status}")
 
-    # Determine "best" result for controls
-    if args.select_mode == "greedy":
-        # Use the K that achieves success, or largest K
+        # For greedy mode: use best successful K, or largest K
         best_idx = len(main_results) - 1
         for i, r in enumerate(main_results):
             if r["success"]:
                 best_idx = i
                 break
         best_k = main_results[best_idx]["k"]
-    else:
-        best_k = len(selected) if args.select_mode != "greedy" else k_steps[-1]
+        selected_for_controls = candidates[:best_k]
 
-    # Build the "best" plan for controls
-    best_plan = SteeringPlan(pos=pos_dest)
-    for c in candidates[:best_k]:
-        best_plan.add(c)
+    # Build the control plan from actual selection
+    control_plan = SteeringPlan(pos=pos_dest)
+    for c in selected_for_controls:
+        control_plan.add(c)
+
+    # Determine best_idx for non-greedy modes (they have only one result)
+    if args.select_mode != "greedy":
+        best_idx = 0
 
     # =========================================================================
     # Step 5: Controls
     # =========================================================================
     control_results = {}
+    # IMPORTANT: Use best_idx consistently - controls are built on best_k, so compare to best_idx result
+    main_d_diff = main_results[best_idx]["d_logit_diff"] if main_results else 0.0
 
     if "random" in controls:
         safe_print(f"\nControl: Random neurons (n={args.control_trials} trials)...")
         random_diffs = []
-        avg_delta_mag = sum(abs(c.delta) for c in candidates[:best_k]) / best_k if best_k > 0 else 1.0
 
         for t in range(args.control_trials):
-            rand_plan = make_random_plan(best_k, layers, d_mlp, pos_dest, avg_delta_mag)
+            rand_plan = make_random_plan_like(control_plan, layers, d_mlp)
             rand_logits = run_with_plan(model, dest_tokens, rand_plan, args.alpha)
             rand_m = compute_logit_metrics(model.tokenizer, rand_logits, target_id, alt_id, args.topk_tokens)
-            random_diffs.append(rand_m.logit_diff - baseline.logit_diff)
+            random_diffs.append(rand_m.logit_diff - baseline_dual.target_alt.logit_diff)
 
         avg_rand = sum(random_diffs) / len(random_diffs)
         std_rand = (sum((x - avg_rand)**2 for x in random_diffs) / len(random_diffs)) ** 0.5
-        main_d_diff = main_results[-1]["d_logit_diff"] if main_results else 0.0
         control_results["random"] = {
             "d_logit_diff_mean": avg_rand,
             "d_logit_diff_std": std_rand,
@@ -831,18 +1192,17 @@ def main():
         safe_print(f"  Random: d_diff_mean={avg_rand:+.4f} +/- {std_rand:.4f}, specificity={control_results['random']['specificity']:.1f}x")
 
     if "permute" in controls:
-        safe_print(f"\nControl: Permuted deltas (n={args.control_trials} trials)...")
+        safe_print(f"\nControl: Permuted deltas within-layer (n={args.control_trials} trials)...")
         perm_diffs = []
 
         for t in range(args.control_trials):
-            perm_plan = make_permuted_plan(best_plan)
+            perm_plan = make_permuted_plan_within_layer(control_plan)
             perm_logits = run_with_plan(model, dest_tokens, perm_plan, args.alpha)
             perm_m = compute_logit_metrics(model.tokenizer, perm_logits, target_id, alt_id, args.topk_tokens)
-            perm_diffs.append(perm_m.logit_diff - baseline.logit_diff)
+            perm_diffs.append(perm_m.logit_diff - baseline_dual.target_alt.logit_diff)
 
         avg_perm = sum(perm_diffs) / len(perm_diffs)
         std_perm = (sum((x - avg_perm)**2 for x in perm_diffs) / len(perm_diffs)) ** 0.5
-        main_d_diff = main_results[-1]["d_logit_diff"] if main_results else 0.0
         control_results["permute"] = {
             "d_logit_diff_mean": avg_perm,
             "d_logit_diff_std": std_perm,
@@ -851,20 +1211,73 @@ def main():
         }
         safe_print(f"  Permute: d_diff_mean={avg_perm:+.4f} +/- {std_perm:.4f}, specificity={control_results['permute']['specificity']:.1f}x")
 
+    if "permute_cross" in controls:
+        safe_print(f"\nControl: Permuted deltas cross-layer (n={args.control_trials} trials)...")
+        perm_cross_diffs = []
+
+        for t in range(args.control_trials):
+            perm_plan = make_permuted_plan_cross_layer(control_plan)
+            perm_logits = run_with_plan(model, dest_tokens, perm_plan, args.alpha)
+            perm_m = compute_logit_metrics(model.tokenizer, perm_logits, target_id, alt_id, args.topk_tokens)
+            perm_cross_diffs.append(perm_m.logit_diff - baseline_dual.target_alt.logit_diff)
+
+        avg_perm = sum(perm_cross_diffs) / len(perm_cross_diffs)
+        std_perm = (sum((x - avg_perm)**2 for x in perm_cross_diffs) / len(perm_cross_diffs)) ** 0.5
+        control_results["permute_cross"] = {
+            "d_logit_diff_mean": avg_perm,
+            "d_logit_diff_std": std_perm,
+            "samples": perm_cross_diffs,
+            "specificity": abs(main_d_diff) / max(abs(avg_perm), 1e-6),
+        }
+        safe_print(f"  Permute_cross: d_diff_mean={avg_perm:+.4f} +/- {std_perm:.4f}, specificity={control_results['permute_cross']['specificity']:.1f}x")
+
     if "negdelta" in controls:
         safe_print("\nControl: Negated deltas...")
-        neg_plan = make_negdelta_plan(best_plan)
+        neg_plan = make_negdelta_plan(control_plan)
         neg_logits = run_with_plan(model, dest_tokens, neg_plan, args.alpha)
         neg_m = compute_logit_metrics(model.tokenizer, neg_logits, target_id, alt_id, args.topk_tokens)
-        neg_d_diff = neg_m.logit_diff - baseline.logit_diff
+        neg_d_diff = neg_m.logit_diff - baseline_dual.target_alt.logit_diff
 
-        main_d_diff = main_results[-1]["d_logit_diff"] if main_results else 0.0
         control_results["negdelta"] = {
             "d_logit_diff": neg_d_diff,
             "direction_correct": (main_d_diff > 0 and neg_d_diff < 0) or (main_d_diff < 0 and neg_d_diff > 0),
             "steered": metrics_to_dict(neg_m),
         }
         safe_print(f"  Negdelta: d_diff={neg_d_diff:+.4f} (direction_correct={control_results['negdelta']['direction_correct']})")
+
+    if "wrongpos" in controls:
+        # Wrong position control: apply same plan at pos-1 or pos-2
+        safe_print("\nControl: Wrong position...")
+        wrongpos_results = []
+
+        for offset in [-1, -2]:
+            wrong_pos = pos_dest + offset
+            # Guard against out-of-bounds positions
+            if wrong_pos < 0 or wrong_pos >= dest_seq_len:
+                continue
+
+            wrong_pos_plan = control_plan.with_new_pos(wrong_pos)
+            wrong_pos_logits = run_with_plan(model, dest_tokens, wrong_pos_plan, args.alpha)
+            wrong_pos_m = compute_logit_metrics(model.tokenizer, wrong_pos_logits, target_id, alt_id, args.topk_tokens)
+            wrong_pos_d_diff = wrong_pos_m.logit_diff - baseline_dual.target_alt.logit_diff
+
+            wrong_tok = model.tokenizer.decode([dest_tokens[0, wrong_pos].item()])
+            wrongpos_results.append({
+                "offset": offset,
+                "pos": wrong_pos,
+                "token_at_pos": sanitize_token(wrong_tok),
+                "d_logit_diff": wrong_pos_d_diff,
+            })
+            safe_print(f"  pos={wrong_pos} ({sanitize_token(wrong_tok)!r}): d_diff={wrong_pos_d_diff:+.4f}")
+
+        if wrongpos_results:
+            avg_wrongpos = sum(r["d_logit_diff"] for r in wrongpos_results) / len(wrongpos_results)
+            control_results["wrongpos"] = {
+                "positions": wrongpos_results,
+                "d_logit_diff_mean": avg_wrongpos,
+                "specificity": abs(main_d_diff) / max(abs(avg_wrongpos), 1e-6),
+            }
+            safe_print(f"  WrongPos avg: d_diff_mean={avg_wrongpos:+.4f}, specificity={control_results['wrongpos']['specificity']:.1f}x")
 
     if "wrongsrc" in controls and args.wrong_source_prompt:
         safe_print("\nControl: Wrong source prompt...")
@@ -875,14 +1288,13 @@ def main():
         # Recompute deltas with wrong source
         wrong_candidates = rank_candidates_pos1(acts_dest, acts_wrong, grads, layers, positive_only=positive_only)
         wrong_plan = SteeringPlan(pos=pos_dest)
-        for c in wrong_candidates[:best_k]:
+        for c in wrong_candidates[:len(selected_for_controls)]:
             wrong_plan.add(c)
 
         wrong_logits = run_with_plan(model, dest_tokens, wrong_plan, args.alpha)
         wrong_m = compute_logit_metrics(model.tokenizer, wrong_logits, target_id, alt_id, args.topk_tokens)
-        wrong_d_diff = wrong_m.logit_diff - baseline.logit_diff
+        wrong_d_diff = wrong_m.logit_diff - baseline_dual.target_alt.logit_diff
 
-        main_d_diff = main_results[-1]["d_logit_diff"] if main_results else 0.0
         control_results["wrongsrc"] = {
             "d_logit_diff": wrong_d_diff,
             "specificity": abs(main_d_diff) / max(abs(wrong_d_diff), 1e-6),
@@ -897,16 +1309,20 @@ def main():
     safe_print("SUMMARY")
     safe_print("=" * 70)
 
-    safe_print(f"\nBaseline: logit_diff={baseline.logit_diff:+.4f}, rank_target={baseline.rank_target}, top1={baseline.top1_token!r}")
+    safe_print(f"\nBaseline: logit_diff={baseline_dual.target_alt.logit_diff:+.4f}, rank_target={baseline_dual.target_alt.rank_target}, top1={baseline_dual.target_alt.top1_token!r}")
 
     if main_results:
-        best_r = main_results[-1]
-        safe_print(f"\nBest intervention (K={best_r.get('k', best_k)}):")
-        safe_print(f"  d_logit_diff = {best_r['d_logit_diff']:+.4f}")
-        safe_print(f"  pred/actual  = {best_r['pred_vs_actual']:.2f}")
-        if "steered" in best_r:
-            s = best_r["steered"]
-            safe_print(f"  steered: logit_diff={s['logit_diff']:+.4f}, rank_target={s['rank_target']}, top1={s['top1_token']!r}")
+        # Use best_idx consistently (same as controls were built on)
+        best_r = main_results[best_idx]
+        k_used = best_r.get('k', len(selected_for_controls))
+        safe_print(f"\nBest intervention (K={k_used}):")
+        safe_print(f"  d_logit_diff (target-alt) = {best_r['d_logit_diff']:+.4f}")
+        if not baseline_dual.same_objective:
+            safe_print(f"  d_logit_diff (objective)  = {best_r['d_logit_diff_obj']:+.4f}")
+        safe_print(f"  d_target_logit            = {best_r['d_target_logit']:+.4f}")
+        safe_print(f"  d_alt_logit               = {best_r['d_alt_logit']:+.4f}")
+        safe_print(f"  pred/actual               = {best_r['pred_vs_actual']:.2f}")
+        safe_print(f"  pred-actual               = {best_r['pred_minus_actual']:+.4f}")
 
         if best_r.get("success"):
             safe_print("  STATUS: SUCCESS (target outranks alt)")
@@ -939,15 +1355,23 @@ def main():
         "target_id": target_id,
         "alt_token": args.alt_token,
         "alt_id": alt_id,
-        "pos": pos_dest,
+        "objective": args.objective,
+        "objective_alt_id": objective_alt_id,
+        "objective_alt_token": objective_alt_token,
+        "pos_arg": pos_arg,
+        "pos_dest_normalized": pos_dest,
+        "pos_src_normalized": pos_src,
+        "dest_token_at_pos": sanitize_token(dest_tok_at_pos),
+        "src_token_at_pos": sanitize_token(src_tok_at_pos),
         "layers": layers,
         "alpha": args.alpha,
         "select_mode": args.select_mode,
         "k_per_layer": args.k_per_layer,
         "k_global": args.k_global,
         "k_steps": k_steps,
+        "positive_only": positive_only,
         "total_candidates": len(candidates),
-        "baseline": metrics_to_dict(baseline),
+        "baseline": dual_metrics_to_dict(baseline_dual),
         "main_results": main_results,
         "control_results": control_results,
         "layer_distribution": {
@@ -977,9 +1401,16 @@ def main():
             })
     safe_print(f"Saved: {csv_path}")
 
+    # Generate plots
+    if not args.no_plots:
+        safe_print("\nGenerating plots...")
+        # Pass main_effect from best_idx (consistent with controls comparison)
+        main_effect_for_plot = main_results[best_idx]["d_logit_diff"] if main_results else 0.0
+        generate_plots(out_dir, main_results, control_results, baseline_dual.target_alt.logit_diff, 
+                      main_effect_for_plot, best_idx)
+
     safe_print("\nDone.")
 
 
 if __name__ == "__main__":
     main()
-
