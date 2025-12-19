@@ -132,8 +132,13 @@ def render_token_heatmap_html(
     cfg: HeatmapConfig,
     max_abs_override: Optional[float] = None,
     title: str = "",
+    show_meta: bool = True,
 ) -> str:
-    """Render a token heatmap as an HTML block (Streamlit: unsafe_allow_html=True)."""
+    """Render a token heatmap as an HTML block (Streamlit: unsafe_allow_html=True).
+    
+    Args:
+        show_meta: If False, hide the per-prompt meta line (max_abs/tokens/per_row)
+    """
     if len(tokens_ascii) != len(values) or len(token_ids) != len(values):
         raise ValueError("tokens_ascii, token_ids, and values must have the same length")
 
@@ -144,9 +149,9 @@ def render_token_heatmap_html(
     if title:
         title_html = f"<div class='ns-heatmap-title'>{html.escape(title)}</div>"
 
-    info_line = (
-        f"<div class='ns-heatmap-meta'>max_abs={max_abs:.6f} | tokens={len(values)} | per_row={int(cfg.tokens_per_row)}</div>"
-    )
+    info_line = ""
+    if show_meta:
+        info_line = f"<div class='ns-heatmap-meta'>max_abs={max_abs:.6f} | tokens={len(values)} | per_row={int(cfg.tokens_per_row)}</div>"
 
     css = (
         "<style>"
@@ -214,8 +219,21 @@ def render_stacked_prompts_heatmap_html(
     cfg: HeatmapConfig,
     global_max_abs: Optional[float] = None,
     title: str = "",
+    subtitle_html: str = "",
+    meta_extra: str = "",
+    compact: bool = False,
 ) -> str:
-    """Render stacked prompts heatmap for the same neuron across prompts."""
+    """Render stacked prompts heatmap for the same neuron across prompts.
+    
+    Args:
+        prompt_series: List of (prompt_id, tokens_ascii, token_ids, values)
+        cfg: HeatmapConfig
+        global_max_abs: Optional max abs value for normalization
+        title: Title line (e.g. "Layer 17 | Neuron 5863")
+        subtitle_html: Raw HTML to inject after title (e.g. write scores)
+        meta_extra: Extra text to append to the meta line (e.g. "| act=1.64 | inf=+0.96")
+        compact: If True, hide per-prompt titles and meta lines for vertical compactness
+    """
     if global_max_abs is None:
         gm = 0.0
         for _, toks, _, vals in prompt_series:
@@ -227,6 +245,7 @@ def render_stacked_prompts_heatmap_html(
     css = (
         "<style>"
         ".ns-stacked-title { font-weight: 700; margin: 8px 0 4px 0; }"
+        ".ns-stacked-subtitle { margin: 4px 0; }"
         ".ns-stacked-meta { color: #666; font-size: 12px; margin: 0 0 8px 0; }"
         ".ns-stacked-prompt-id { margin: 10px 0 4px 0; font-weight: 600; }"
         "</style>"
@@ -235,12 +254,21 @@ def render_stacked_prompts_heatmap_html(
     parts: List[str] = [css]
     if title:
         parts.append(f"<div class='ns-stacked-title'>{html.escape(title)}</div>")
-    parts.append(
-        f"<div class='ns-stacked-meta'>global_max_abs={float(global_max_abs):.6f} | prompts={len(prompt_series)}</div>"
-    )
+    
+    # Inject subtitle HTML (write scores, etc.) right after title
+    if subtitle_html:
+        parts.append(f"<div class='ns-stacked-subtitle'>{subtitle_html}</div>")
+    
+    # Meta line with optional extra info
+    meta_line = f"global_max_abs={float(global_max_abs):.6f} | prompts={len(prompt_series)}"
+    if meta_extra:
+        meta_line += f" {meta_extra}"
+    parts.append(f"<div class='ns-stacked-meta'>{meta_line}</div>")
 
     for prompt_id, toks, tids, vals in prompt_series:
-        parts.append(f"<div class='ns-stacked-prompt-id'>prompt: {html.escape(prompt_id)}</div>")
+        # In compact mode, skip per-prompt titles
+        if not compact:
+            parts.append(f"<div class='ns-stacked-prompt-id'>prompt: {html.escape(prompt_id)}</div>")
         parts.append(
             render_token_heatmap_html(
                 tokens_ascii=toks,
@@ -249,6 +277,7 @@ def render_stacked_prompts_heatmap_html(
                 cfg=cfg,
                 max_abs_override=float(global_max_abs),
                 title="",
+                show_meta=not compact,
             )
         )
 

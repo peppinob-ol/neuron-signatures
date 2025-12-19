@@ -19,11 +19,6 @@ import plotly.graph_objects as go
 import streamlit as st
 import torch
 
-try:
-    # Optional: keyboard shortcuts for arrow navigation
-    from streamlit_shortcuts import add_shortcuts  # type: ignore
-except ModuleNotFoundError:
-    add_shortcuts = None
 
 try:
     # Normal usage when repo root is on sys.path (e.g., `python -m ...`)
@@ -69,7 +64,7 @@ def _list_influence_rank_files(analysis_dir: Path) -> List[Path]:
     List influence ranking files in analysis_dir.
 
     We prefer CSV (`influence_*.csv`) when present, but will also list JSON
-    (`influence_*.json`) while excluding `*_meta.json`.
+    (`influence_*.json`) while excluding `*_meta.json` and `*_write_scores*.json`.
     Sorted by modification time (newest first).
     """
     if not analysis_dir.exists():
@@ -79,9 +74,69 @@ def _list_influence_rank_files(analysis_dir: Path) -> List[Path]:
     for p in files:
         if p.name.endswith("_meta.json"):
             continue
+        if "_write_scores" in p.name:
+            continue
         out.append(p)
     out.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     return out
+
+
+@st.cache_data(show_spinner=False)
+def _load_write_scores_cached(path_str: str) -> Dict[Tuple[int, int], Dict[str, Any]]:
+    """
+    Load write scores JSON and index by (layer, neuron).
+    
+    Returns dict: {(layer, neuron): {"top_pos": [...], "top_neg": [...], "explicit": [...]}}
+    """
+    path = Path(path_str)
+    if not path.exists():
+        return {}
+    
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    
+    result: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for n in data.get("neurons", []):
+        key = (int(n.get("layer", 0)), int(n.get("neuron", 0)))
+        ws = n.get("write_scores")
+        if ws:
+            result[key] = ws
+    return result
+
+
+def _find_write_scores_file(analysis_dir: Path) -> Optional[Path]:
+    """Find the most recent write_scores JSON file in analysis_dir."""
+    if not analysis_dir.exists():
+        return None
+    files = list(analysis_dir.glob("*_write_scores*.json"))
+    if not files:
+        return None
+    files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return files[0]
+
+
+def _render_write_scores_compact(ws: Dict[str, Any], n_show: int = 5) -> str:
+    """Render write scores as compact HTML spans (negative left, positive right)."""
+    top_pos = ws.get("top_pos", [])[:n_show]
+    top_neg = ws.get("top_neg", [])[:n_show]
+    
+    neg_parts = []
+    for t in top_neg:
+        score = t.get("score", 0)
+        tok = t.get("token", "?").replace("<", "&lt;").replace(">", "&gt;")
+        neg_parts.append(f'<span style="background:#f8d7da;padding:1px 4px;border-radius:3px;margin:1px;font-size:12px;">{tok} <small>{score:.2f}</small></span>')
+    
+    pos_parts = []
+    for t in top_pos:
+        score = t.get("score", 0)
+        tok = t.get("token", "?").replace("<", "&lt;").replace(">", "&gt;")
+        pos_parts.append(f'<span style="background:#d4edda;padding:1px 4px;border-radius:3px;margin:1px;font-size:12px;">{tok} <small>+{score:.2f}</small></span>')
+    
+    html = '<div style="line-height:1.8;">'
+    html += '<b style="color:#dc3545;font-size:11px;">-</b> ' + " ".join(neg_parts)
+    html += ' &nbsp; <b style="color:#28a745;font-size:11px;">+</b> ' + " ".join(pos_parts)
+    html += '</div>'
+    return html
 
 
 def _load_influence_ranking(path: Path) -> Optional[List[Dict[str, Any]]]:
@@ -265,14 +320,7 @@ def main() -> None:
     st.session_state._max_layer = n_layers - 1
     st.session_state._max_neuron = d_mlp - 1
 
-    # Keyboard navigation toggle
-    st.sidebar.header("Keyboard navigation")
-    kb_enabled = st.sidebar.checkbox("enable_arrow_keys", value=True)
-    st.sidebar.caption("Up/Down: layer  Left/Right: neuron (or filtered list, if enabled below)")
-    if kb_enabled and add_shortcuts is None:
-        st.sidebar.warning("Install streamlit-shortcuts to enable arrow keys: uv pip install -r requirements.txt")
-
-    # Candidate list navigation (set later after we load rankings)
+    # Candidate list navigation helper
     def _apply_candidate_idx() -> None:
         pairs = list(st.session_state.get("_candidate_pairs", []))
         if not pairs:
@@ -284,57 +332,44 @@ def main() -> None:
         st.session_state.layer = int(layer_i)
         st.session_state.neuron = int(neuron_i)
 
-    # Callback functions for arrow navigation (used by hidden/visible buttons).
-    def kb_layer_up() -> None:
-        if st.session_state.get("arrow_keys_candidates", False) and st.session_state.get("_candidate_pairs"):
-            st.session_state.candidate_idx = max(int(st.session_state.candidate_idx) - 1, 0)
+    # Callback functions for keyboard navigation buttons
+    def kb_prev() -> None:
+        if st.session_state.get("_candidate_pairs"):
+            st.session_state.candidate_idx = max(int(st.session_state.get("candidate_idx", 0)) - 1, 0)
             _apply_candidate_idx()
-            return
-        st.session_state.layer = max(int(st.session_state.layer) - 1, 0)
+        else:
+            st.session_state.layer = max(int(st.session_state.layer) - 1, 0)
 
-    def kb_layer_down() -> None:
-        if st.session_state.get("arrow_keys_candidates", False) and st.session_state.get("_candidate_pairs"):
+    def kb_next() -> None:
+        if st.session_state.get("_candidate_pairs"):
             pairs = list(st.session_state.get("_candidate_pairs", []))
-            st.session_state.candidate_idx = min(int(st.session_state.candidate_idx) + 1, len(pairs) - 1)
+            st.session_state.candidate_idx = min(int(st.session_state.get("candidate_idx", 0)) + 1, len(pairs) - 1)
             _apply_candidate_idx()
-            return
-        st.session_state.layer = min(int(st.session_state.layer) + 1, int(st.session_state._max_layer))
+        else:
+            st.session_state.layer = min(int(st.session_state.layer) + 1, int(st.session_state._max_layer))
 
-    def kb_neuron_left() -> None:
-        if st.session_state.get("arrow_keys_candidates", False) and st.session_state.get("_candidate_pairs"):
-            st.session_state.candidate_idx = max(int(st.session_state.candidate_idx) - 10, 0)
+    def kb_prev10() -> None:
+        if st.session_state.get("_candidate_pairs"):
+            st.session_state.candidate_idx = max(int(st.session_state.get("candidate_idx", 0)) - 10, 0)
             _apply_candidate_idx()
-            return
-        st.session_state.neuron = max(int(st.session_state.neuron) - 1, 0)
+        else:
+            st.session_state.neuron = max(int(st.session_state.neuron) - 1, 0)
 
-    def kb_neuron_right() -> None:
-        if st.session_state.get("arrow_keys_candidates", False) and st.session_state.get("_candidate_pairs"):
+    def kb_next10() -> None:
+        if st.session_state.get("_candidate_pairs"):
             pairs = list(st.session_state.get("_candidate_pairs", []))
-            st.session_state.candidate_idx = min(int(st.session_state.candidate_idx) + 10, len(pairs) - 1)
+            st.session_state.candidate_idx = min(int(st.session_state.get("candidate_idx", 0)) + 10, len(pairs) - 1)
             _apply_candidate_idx()
-            return
-        st.session_state.neuron = min(int(st.session_state.neuron) + 1, int(st.session_state._max_neuron))
+        else:
+            st.session_state.neuron = min(int(st.session_state.neuron) + 1, int(st.session_state._max_neuron))
 
-    # Register shortcuts (only if installed and enabled).
-    # streamlit-shortcuts binds keyboard keys to Streamlit elements *by key*,
-    # so we create buttons with matching keys and wire them to these callbacks.
-    if kb_enabled and add_shortcuts is not None:
-        # Buttons can be clicked too; arrow keys will click them automatically.
-        nav = st.sidebar.container()
-        nav_cols = nav.columns(4)
-        nav_cols[0].button("Up", key="kb_layer_up", on_click=kb_layer_up, help="ArrowUp: layer -1")
-        nav_cols[1].button("Down", key="kb_layer_down", on_click=kb_layer_down, help="ArrowDown: layer +1")
-        nav_cols[2].button("Left", key="kb_neuron_left", on_click=kb_neuron_left, help="ArrowLeft: neuron -1")
-        nav_cols[3].button("Right", key="kb_neuron_right", on_click=kb_neuron_right, help="ArrowRight: neuron +1")
-
-        # Bind arrow keys to those element keys. `e.key` becomes lowercase in the
-        # library implementation, so use 'arrowup'/'arrowdown'/etc.
-        add_shortcuts(
-            kb_layer_up="arrowup",
-            kb_layer_down="arrowdown",
-            kb_neuron_left="arrowleft",
-            kb_neuron_right="arrowright",
-        )
+    # Navigation buttons (keyboard shortcuts not supported in Streamlit sandbox)
+    st.sidebar.header("Quick navigation")
+    nav_cols = st.sidebar.columns(4)
+    nav_cols[0].button("Prev", key="kb_prev_btn", on_click=kb_prev, help="Previous (-1)")
+    nav_cols[1].button("Next", key="kb_next_btn", on_click=kb_next, help="Next (+1)")
+    nav_cols[2].button("-10", key="kb_prev10_btn", on_click=kb_prev10, help="Back 10")
+    nav_cols[3].button("+10", key="kb_next10_btn", on_click=kb_next10, help="Forward 10")
 
     st.sidebar.header("Neuron selection")
     top_neurons = _load_top_neurons(analysis_dir) if analysis_dir.exists() else None
@@ -485,13 +520,13 @@ def main() -> None:
     st.session_state._candidate_labels = candidate_labels
     st.session_state._influence_info = influence_info
 
-    # Toggle: arrow keys browse candidates (if available)
-    st.sidebar.checkbox(
-        "arrow_keys_candidates",
-        value=(bool(candidate_pairs)),
-        disabled=(not bool(candidate_pairs)),
-        help="If enabled, arrow keys browse within the filtered candidate list (Up/Down: +/-1, Left/Right: +/-10).",
-    )
+    # Load write scores if available
+    write_scores_file = _find_write_scores_file(analysis_dir)
+    write_scores_data: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    if write_scores_file:
+        write_scores_data = _load_write_scores_cached(str(write_scores_file))
+    st.session_state._write_scores = write_scores_data
+
 
     if candidate_pairs:
         # Keep indices in range if filters changed.
@@ -516,11 +551,11 @@ def main() -> None:
             key="candidate_choice_idx",
             on_change=apply_candidate_choice,
         )
-        st.sidebar.caption("Tip: enable arrow_keys_candidates to step through this list with the keyboard.")
+        st.sidebar.caption("Tip: use Prev/Next buttons to step through, or -10/+10 for jumps.")
         # Ensure layer/neuron are consistent if candidate_idx changed elsewhere (keyboard)
         _apply_candidate_idx()
     else:
-        st.sidebar.info("No ranking file found (or manual mode). Use manual indices or arrow keys.")
+        st.sidebar.info("No ranking file found (or manual mode). Use manual layer/neuron inputs.")
 
     # Manual controls always visible (keeps state in sync with arrow keys)
     st.sidebar.number_input("layer", min_value=0, max_value=n_layers - 1, step=1, key="layer")
@@ -566,7 +601,7 @@ def main() -> None:
     st.markdown("### Token heatmap (Neuronpedia-style)")
     st.caption("Green = positive activations, orange = negative activations. Opacity uses log scaling.")
 
-    hm_col1, hm_col2 = st.columns([1, 1])
+    hm_col1, hm_col2, hm_col3 = st.columns([1, 1, 1])
     with hm_col1:
         tokens_per_row = st.number_input("tokens_per_row", min_value=10, max_value=200, value=50, step=5)
         show_values = st.checkbox("show_values_on_tokens", value=True)
@@ -590,6 +625,9 @@ def main() -> None:
             step=0.01,
             help="Minimum background opacity for highlighted tokens.",
         )
+    with hm_col3:
+        compact_view = st.checkbox("compact_view", value=True, help="Hide per-prompt titles and meta lines")
+        view_write_scores = st.checkbox("view_write_scores", value=True, help="Show write scores for neuron")
 
     cfg = HeatmapConfig(
         tokens_per_row=int(tokens_per_row),
@@ -623,23 +661,46 @@ def main() -> None:
 
     st.markdown("### Stacked prompts heatmap (same neuron)")
 
-    # Show influence info if available for this neuron
+    # Show influence info and write scores in compact form
     inf_info = st.session_state.get("_influence_info", {}).get((layer, neuron))
+    ws_info = st.session_state.get("_write_scores", {}).get((layer, neuron))
+    
+    # Write scores expander (above the stacked heatmap) - only if checkbox enabled
+    if view_write_scores and ws_info:
+        with st.expander("Write scores details", expanded=False):
+            top_pos = ws_info.get("top_pos", [])
+            top_neg = ws_info.get("top_neg", [])
+            explicit = ws_info.get("explicit", [])
+            
+            col_n, col_p = st.columns(2)
+            with col_n:
+                st.markdown("**Suppresses (-)**")
+                for t in top_neg[:10]:
+                    st.markdown(f"- `{t['token']}` ({t['score']:+.3f})")
+            with col_p:
+                st.markdown("**Promotes (+)**")
+                for t in top_pos[:10]:
+                    st.markdown(f"- `{t['token']}` ({t['score']:+.3f})")
+            
+            if explicit:
+                st.markdown("**Explicit tokens:**")
+                exp_parts = [f"`{e['token']}`({e['score']:+.2f})" for e in explicit]
+                st.markdown(" | ".join(exp_parts))
+    
+    # Build subtitle_html (write scores compact line) and meta_extra (influence info)
+    subtitle_html = ""
+    meta_extra = ""
+    
+    if view_write_scores and ws_info:
+        subtitle_html = _render_write_scores_compact(ws_info, n_show=5)
+    
     if inf_info:
         meta = inf_info.get("meta", {})
         target_tok = meta.get("target_token_ascii", "")
         target_pos = meta.get("target_pos", "")
-        metric_name = meta.get("metric", "act*grad")
-        inf_str = (
-            f"**Influence scores** | "
-            f"act={inf_info['activation']:.6g} | "
-            f"influence={inf_info['influence']:.6g} | "
-            f"abs_influence={inf_info['abs_influence']:.6g} | "
-            f"metric={metric_name}"
-        )
+        meta_extra = f"| act={inf_info['activation']:.3g} | inf={inf_info['influence']:+.3g}"
         if target_tok:
-            inf_str += f" | target=`{target_tok}` (pos={target_pos})"
-        st.markdown(inf_str)
+            meta_extra += f" | seed_target={target_tok}@{target_pos}"
 
     prompt_series = [(pid, toks, tids, vals) for (pid, tids, toks, vals) in series]
     stacked_html = render_stacked_prompts_heatmap_html(
@@ -647,6 +708,9 @@ def main() -> None:
         cfg=cfg,
         global_max_abs=(None if normalize_mode == "per_prompt" else max_abs),
         title=f"Layer {layer} | Neuron {neuron}",
+        subtitle_html=subtitle_html,
+        meta_extra=meta_extra,
+        compact=compact_view,
     )
     st.markdown(stacked_html, unsafe_allow_html=True)
 
@@ -699,13 +763,22 @@ def main() -> None:
                     key="infl_y_metric",
                 )
             with chart_cols[2]:
+                # Handle small datasets: min_value must be <= max_value
+                n_items = len(chart_layers)
+                min_top_n = min(10, n_items)
+                # Clear cached value if it's out of the valid range
+                cached_key = "infl_show_top_n"
+                if cached_key in st.session_state:
+                    cached_val = st.session_state[cached_key]
+                    if cached_val < min_top_n or cached_val > n_items:
+                        del st.session_state[cached_key]
                 show_top_n = st.number_input(
                     "Show top N",
-                    min_value=10,
-                    max_value=len(chart_layers),
-                    value=min(200, len(chart_layers)),
+                    min_value=min_top_n,
+                    max_value=n_items,
+                    value=min(200, n_items),
                     step=10,
-                    key="infl_show_top_n",
+                    key=cached_key,
                 )
 
             # Filter to top N by abs_influence
